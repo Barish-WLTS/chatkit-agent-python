@@ -170,7 +170,7 @@ Do not:
     model_settings=ModelSettings(
         temperature=0.7,  # Reduced for more consistent responses
         top_p=0.9,
-        max_tokens=2000,  # Increased to ensure complete responses
+        max_tokens=600,  # Increased to ensure complete responses
         store=True
     )
 )
