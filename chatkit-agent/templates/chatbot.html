@@ -724,6 +724,7 @@
         const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
         let inactivityTimer = null;
         let sessionEnded = false;
+        let isPageUnloading = false;
 
         function autoResize(textarea) {
             textarea.style.height = 'auto';
@@ -1029,33 +1030,49 @@
                 }
             }
         }// Handle visibility change (tab switched or minimized)
-        document.addEventListener('visibilitychange', async () => {
-            if (document.hidden && sessionId && messageCount > 2 && !sessionEnded) {
-                console.log('Page hidden - ending session');
-                await endSession(true);
-            }
-        });
+        // document.addEventListener('visibilitychange', async () => {
+        //     if (document.hidden && sessionId && messageCount > 2 && !sessionEnded && !isPageUnloading) {
+        //         console.log('👁️ Page hidden - attempting email send (but keeping session active)');
+                
+        //         // Send email but DON'T set sessionEnded
+        //         try {
+        //             const response = await fetch('/api/end-session', {
+        //                 method: 'POST',
+        //                 headers: { 'Content-Type': 'application/json' },
+        //                 body: JSON.stringify({ session_id: sessionId })
+        //             });
+        //             console.log('📧 Email attempt result:', await response.json());
+        //         } catch (error) {
+        //             console.error('❌ Email failed:', error);
+        //         }
+        //     }
+        // });
 
-        // Handle page unload (close, reload, navigate away)
-        window.addEventListener('beforeunload', async (event) => {
+        // Before unload - mark as unloading and use sendBeacon
+        window.addEventListener('beforeunload', (event) => {
             if (sessionId && messageCount > 2 && !sessionEnded) {
-                // Use sendBeacon for reliable delivery during page unload
+                console.log('⚠️ Page ACTUALLY closing - using sendBeacon');
+                isPageUnloading = true;
+                sessionEnded = true;
+                
                 const blob = new Blob([JSON.stringify({ session_id: sessionId })], {
                     type: 'application/json'
                 });
                 navigator.sendBeacon('/api/end-session', blob);
-                sessionEnded = true;
             }
         });
 
-        // Handle page hide (iOS Safari, mobile browsers)
-        window.addEventListener('pagehide', async (event) => {
+        // Page hide - backup for mobile browsers
+        window.addEventListener('pagehide', (event) => {
             if (sessionId && messageCount > 2 && !sessionEnded) {
+                console.log('📴 Page hide event - using sendBeacon');
+                isPageUnloading = true;
+                sessionEnded = true;
+                
                 const blob = new Blob([JSON.stringify({ session_id: sessionId })], {
                     type: 'application/json'
                 });
                 navigator.sendBeacon('/api/end-session', blob);
-                sessionEnded = true;
             }
         });
 

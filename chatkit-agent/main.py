@@ -27,14 +27,14 @@ from agents import (
 
 # ==================== CONFIGURATION ====================
 
-BREVO_API_KEY = os.getenv("BREVO_API_KEY", "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")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "your_brevo_api_key_here")
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 # Multiple recipient emails
 RECIPIENT_EMAILS = [
     "barishwlts@gmail.com",
     "rim.wlts@gmail.com",
-    "hello@gbpseo.in",
+    "hello@gbpseo.in"
 ]
 
 PORT = 3000
@@ -837,11 +837,11 @@ async def end_session(request: Request):
         
         if email_sent:
             print(f"✅ Email sent successfully for session {session_id}")
+            # Clean up session
+            del active_sessions[session_id]
         else:
             print(f"❌ Failed to send email for session {session_id}")
         
-        # Clean up session
-        del active_sessions[session_id]
         
         return JSONResponse({
             "status": "success",
