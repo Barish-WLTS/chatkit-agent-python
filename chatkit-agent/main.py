@@ -6,9 +6,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import re
+import pytz
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -30,12 +31,17 @@ from agents import (
 BREVO_API_KEY = os.getenv("BREVO_API_KEY", "your_brevo_api_key_here")
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
-# Multiple recipient emails
-RECIPIENT_EMAILS = [
-    "barishwlts@gmail.com",
-    "rim.wlts@gmail.com",
-    "hello@gbpseo.in"
-]
+# Recipient emails per brand
+RECIPIENT_EMAILS = {
+    "gbpseo": [
+        "barishwlts@gmail.com",
+        "rim.wlts@gmail.com"
+    ],
+    "whitedigital": [
+        "barishwlts@gmail.com",
+        "info@whitedigital.in"
+    ]
+}
 
 PORT = 3000
 
@@ -51,20 +57,34 @@ class UserContext(BaseModel):
     location: Optional[str] = None
 
 
+class UserLocation(BaseModel):
+    """Store user location from IP"""
+    ip: Optional[str] = None
+    city: Optional[str] = None
+    region: Optional[str] = None
+    country: Optional[str] = None
+
+
 class ConversationSession(BaseModel):
     """Track conversation state"""
     session_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    brand: str = Field(default="gbpseo")  # Track which brand this session is for
     user_context: UserContext = Field(default_factory=UserContext)
+    user_location: UserLocation = Field(default_factory=UserLocation)
     conversation_history: List[TResponseInputItem] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     last_activity: datetime = Field(default_factory=datetime.now)
     email_sent: bool = False
-    contact_ask_count: int = 0  # Track how many times we've asked for contact
+    contact_ask_count: int = 0
+    last_token_usage: int = 0
 
 
 class ChatMessage(BaseModel):
     message: str
     session_id: Optional[str] = None
+    user_info: Optional[Dict[str, str]] = None
+    user_location: Optional[Dict[str, str]] = None
+    brand: Optional[str] = "gbpseo"  # Default to gbpseo for backward compatibility
 
 
 class ChatResponse(BaseModel):
@@ -76,7 +96,8 @@ class ChatResponse(BaseModel):
 
 # ==================== AGENT SETUP ====================
 
-file_search = FileSearchTool(
+# GBPSEO Agent
+gbp_file_search = FileSearchTool(
     vector_store_ids=["vs_68e895ebfd088191ab82202452458820"]
 )
 
@@ -101,29 +122,13 @@ CRITICAL RESPONSE RULES:
 - If you're not sure, still provide your best answer based on GBP knowledge
 - Use proper markdown formatting in ALL responses
 
-CONTACT COLLECTION - HIGHEST PRIORITY:
-You MUST collect these details from every user:
-1. Name (required)
-2. Email address (required - must have @ and domain)
-3. Phone number (required - 10-15 digits)
-
-IMPORTANT RULES FOR CONTACT COLLECTION:
-- Ask for missing contact details in EVERY response until you have all three
-- Be professional but persistent
-- Place the contact request at the END of your response, after providing value
-- Use natural language, don't be robotic
-
-Example flow:
-First message: Answer their question, then ask: "By the way, may I know your name?"
-Second message: Answer question, then: "Thanks [Name]! Could you share your email address?"
-Third message: Answer question, then: "Great! And your phone number so our team can reach you?"
-
-Keep asking until you have: Name + Email + Phone
-
-Validate contact information:
-- Email must contain "@" and a domain (.com, .in, etc.)
-- Phone must be 10-15 digits
-- If invalid, politely ask them to check and re-enter
+PHONE NUMBER COLLECTION:
+- The user has already provided their name and email
+- In EVERY response, professionally ask for their phone number at the END
+- Use natural, non-pushy language like:
+  * "If you'd like our team to contact you directly, feel free to share your phone number."
+  * "For faster assistance, you can also provide your phone number if you'd like a callback."
+  * "Should you need direct support, please share your contact number."
 
 IMPORTANT FORMATTING RULES:
 - Use proper markdown formatting in your responses
@@ -133,29 +138,10 @@ IMPORTANT FORMATTING RULES:
 - Use line breaks between sections for readability
 - Structure pricing clearly with bullet points
 
-Example response format:
-Hi there! Thanks for your interest in our GBP setup services.
-
-For the **Basic GBP Setup Package**, here's what we offer:
-
-**Price:** ₹3,999 for 6 months (₹699/month including GST)
-
-**What's Included:**
-- GBP Setup, audit, and optimization
-- Verification and correction of NAP details
-- Category and subcategory selection
-- Business description and profile/photo uploads
-- Monthly review monitoring and replies
-- Quarterly performance reports
-
-This package is perfect for businesses just getting started with their Google Business Profile.
-
-By the way, may I know your name so I can personalize our conversation?
-
 Tone Guidelines:
 - Be clear and polite
 - Avoid jargon unless the user is already technical
-- End with a friendly CTA or question about missing contact info
+- End with a friendly CTA or question about phone number
 - ALWAYS provide value before asking for information
 
 Do not:
@@ -163,32 +149,114 @@ Do not:
 - Make false guarantees (e.g., "#1 ranking in 3 days")
 - Include internal notes like "[Transferring to...]" in your responses
 - Use emojis
-- Return empty or very short responses without substance
-- Skip asking for contact details""",
+- Return empty or very short responses without substance""",
     model="gpt-4.1-nano",
-    tools=[file_search],
+    tools=[gbp_file_search],
     model_settings=ModelSettings(
-        temperature=0.7,  # Reduced for more consistent responses
+        temperature=0.7,
         top_p=0.9,
-        max_tokens=600,  # Increased to ensure complete responses
+        max_tokens=600,
         store=True
     )
 )
 
+# WhiteDigital Agent
+whitedigital_file_search = FileSearchTool(
+    vector_store_ids=["vs_68f61c986dec8191809bf8ce6ef8282f"]
+)
+
+whitedigital_agent = Agent(
+    name="WhiteDigital_Agent",
+    instructions="""You are a friendly, knowledgeable support and sales assistant for whiteDigital.in, an award-winning PPC and digital advertising agency.
+
+Your role is to assist potential and existing clients in understanding Pay-Per-Click (PPC) management, advertising, and performance optimization services, answer their questions, and guide them toward booking a Free PPC Audit or Consultation.
+
+Brand Voice: Professional, confident, and results-driven — yet approachable and conversational. Sound like a trusted PPC strategist who understands business growth and ad ROI.
+
+Knowledge Context: whiteDigital.in is recognized among the Top 3% Google Premier Partner Agencies worldwide, managing over $78M+ in ad spend, generating 139,000+ leads, and 88,000+ eCommerce sales for clients globally.
+
+Core services include:
+- Pay-Per-Click (PPC) Advertising – Google Ads, Facebook Ads, Amazon Ads, and Bing Ads
+- White Label PPC Management – PPC outsourcing for agencies and marketing firms
+- Creative & Landing Page Optimization – High-converting visuals and copy
+- Social Media Marketing & Retargeting
+- PPC Audits and Campaign Analysis
+- Free PPC Audit & Consultation
+
+CRITICAL RESPONSE RULES:
+- Never return empty or short responses
+- Every message must include meaningful, detailed information (at least 2–3 sentences)
+- Always provide value first before asking for contact details
+- If unsure about something, still offer your best insight based on PPC best practices
+- Always be confident, data-informed, and results-focused
+
+PHONE NUMBER COLLECTION:
+- The user has already provided their name and email
+- In every response, professionally and naturally ask for their phone number
+- Use any of the following styles:
+  * "If you'd like faster assistance, please share your phone number and our PPC expert will reach out."
+  * "Would you like us to schedule a free PPC audit call? You can share your contact number for direct assistance."
+  * "For personalized advice, feel free to provide your phone number and we'll connect you with our campaign strategist."
+- This must be included at the end of every response, but never sound forceful
+
+FORMATTING AND STRUCTURE RULES:
+- Use Markdown formatting for all responses
+- **Bold** for highlighting services, stats, and key terms
+- Use bullet points (- or *) for lists
+- Use numbered lists for processes or steps
+- Add line breaks between sections for readability
+- Always include a professional closing line and a soft call to action
+
+Tone Guidelines:
+- Always polite, confident, and genuinely helpful
+- Sound like a human expert, not a chatbot
+- Avoid exaggerated promises or unrealistic timelines
+- Use friendly CTAs — like offering a free audit or a discovery call
+- Always deliver real PPC insight or advice before requesting user details
+
+Do Not:
+- Return empty, one-line, or generic answers
+- Include internal or system notes
+- Use emojis or casual slang
+- Mention or guess pricing unless it's publicly visible
+- Make unverifiable claims such as "#1 ranking guaranteed"
+
+Goal: Help users understand whiteDigital's PPC services, build trust, guide them to book a Free PPC Audit, and collect their phone number.""",
+    model="gpt-4.1-nano",
+    tools=[whitedigital_file_search],
+    model_settings=ModelSettings(
+        temperature=1,
+        top_p=1,
+        max_tokens=609,
+        store=True
+    )
+)
+
+# Agent mapping
+AGENTS = {
+    "gbpseo": gbp_agent,
+    "whitedigital": whitedigital_agent
+}
+
+# Brand display names
+BRAND_NAMES = {
+    "gbpseo": "GBPSEO",
+    "whitedigital": "whiteDigital"
+}
 
 # ==================== SESSION STORAGE ====================
 
 active_sessions: Dict[str, ConversationSession] = {}
 
 
-def get_or_create_session(session_id: Optional[str] = None) -> ConversationSession:
+def get_or_create_session(session_id: Optional[str] = None, brand: str = "gbpseo") -> ConversationSession:
     """Get existing session or create new one"""
     if session_id and session_id in active_sessions:
         session = active_sessions[session_id]
         session.last_activity = datetime.now()
         return session
     
-    new_session = ConversationSession()
+    new_session = ConversationSession(brand=brand)
     active_sessions[new_session.session_id] = new_session
     return new_session
 
@@ -205,20 +273,8 @@ def validate_phone(phone: str) -> bool:
     return 10 <= len(digits) <= 15
 
 
-def extract_user_info(message: str, session: ConversationSession):
-    """Extract user information from message with improved parsing"""
-    user_msg_lower = message.lower()
-    
-    # Extract email with better validation
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    email_matches = re.findall(email_pattern, message)
-    if email_matches:
-        for email in email_matches:
-            if validate_email(email):
-                session.user_context.email = email
-                break
-    
-    # Extract phone number with improved pattern
+def extract_phone_from_message(message: str, session: ConversationSession):
+    """Extract phone number from user message"""
     phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4,5}'
     phone_matches = re.findall(phone_pattern, message)
     if phone_matches:
@@ -226,114 +282,12 @@ def extract_user_info(message: str, session: ConversationSession):
             if validate_phone(phone_raw):
                 session.user_context.phone = phone_raw
                 break
-    
-    # Extract name with multiple patterns - improved logic
-    try:
-        # Pattern 1: "my name is X"
-        if "my name is" in user_msg_lower:
-            parts = message.lower().split("my name is", 1)
-            if len(parts) > 1:
-                name_part = parts[1].split(".")[0].split(",")[0].split("and")[0].split("\n")[0].strip()
-                # Remove email and phone from name
-                name_part = re.sub(email_pattern, '', name_part, flags=re.IGNORECASE).strip()
-                name_part = re.sub(phone_pattern, '', name_part).strip()
-                if 2 <= len(name_part) <= 50 and not '@' in name_part and not name_part.isdigit():
-                    session.user_context.name = name_part.title()
-        
-        # Pattern 2: "i'm X" or "i am X"
-        elif "i'm" in user_msg_lower or "i am" in user_msg_lower:
-            split_word = "i'm" if "i'm" in user_msg_lower else "i am"
-            parts = message.lower().split(split_word, 1)
-            
-            if len(parts) > 1:
-                name_part = parts[1].split(".")[0].split(",")[0].split("and")[0].split("\n")[0].strip()
-                # Remove email and phone from name
-                name_part = re.sub(email_pattern, '', name_part, flags=re.IGNORECASE).strip()
-                name_part = re.sub(phone_pattern, '', name_part).strip()
-                
-                words = name_part.split()
-                if 1 <= len(words) <= 3 and len(name_part) <= 50 and not '@' in name_part and not name_part.isdigit():
-                    session.user_context.name = name_part.title()
-        
-        # Pattern 3: "name:" or "name -" or "name is"
-        elif any(pattern in user_msg_lower for pattern in ["name:", "name -", "name is"]):
-            for split_pattern in ["name:", "name -", "name is"]:
-                if split_pattern in user_msg_lower:
-                    parts = message.lower().split(split_pattern, 1)
-                    if len(parts) > 1:
-                        name_part = parts[1].split("\n")[0].split(",")[0].split("and")[0].split(".")[0].strip()
-                        # Remove email and phone from name
-                        name_part = re.sub(email_pattern, '', name_part, flags=re.IGNORECASE).strip()
-                        name_part = re.sub(phone_pattern, '', name_part).strip()
-                        
-                        if 2 <= len(name_part) <= 50 and not '@' in name_part and not name_part.isdigit():
-                            session.user_context.name = name_part.title()
-                            break
-        
-        # Pattern 4: Check for standalone name (first word capitalized, no special chars)
-        elif not session.user_context.name:
-            words = message.split()
-            for i, word in enumerate(words):
-                # Check if it looks like a name (capitalized, no numbers, no special chars)
-                if word[0].isupper() and word.isalpha() and len(word) >= 2:
-                    potential_name = word
-                    # Check if next word is also a name (for full names)
-                    if i + 1 < len(words) and words[i + 1][0].isupper() and words[i + 1].isalpha():
-                        potential_name += " " + words[i + 1]
-                    
-                    # Only set if we don't have obvious context that it's not a name
-                    if len(potential_name) <= 50 and not any(keyword in user_msg_lower for keyword in 
-                        ["hi", "hello", "thanks", "thank you", "please", "can you", "what", "how", "when", "where", "why"]):
-                        session.user_context.name = potential_name
-                        break
-    
-    except Exception as e:
-        print(f"Name extraction error: {e}")
-
-
-def has_all_contact_details(session: ConversationSession) -> bool:
-    """Check if we have all required contact details"""
-    return bool(
-        session.user_context.name and 
-        session.user_context.email and 
-        session.user_context.phone
-    )
-
-
-def get_missing_contact_fields(session: ConversationSession) -> list:
-    """Get list of missing contact fields"""
-    missing = []
-    if not session.user_context.name:
-        missing.append("name")
-    if not session.user_context.email:
-        missing.append("email address")
-    if not session.user_context.phone:
-        missing.append("phone number")
-    return missing
-
-
-def get_missing_contact_prompt(session: ConversationSession) -> str:
-    """Generate a prompt for missing contact details - only ask for remaining fields"""
-    missing = get_missing_contact_fields(session)
-    
-    if not missing:
-        return ""
-    
-    # Only ask for what's missing
-    if len(missing) == 3:
-        return "\n\nBefore we proceed, could you please share your name, email address, and phone number?"
-    elif len(missing) == 2:
-        return f"\n\nGreat! Could you also provide your {missing[0]} and {missing[1]}?"
-    else:
-        return f"\n\nOne more thing - could you share your {missing[0]}?"
 
 
 def format_markdown_to_html(text: str) -> str:
     """Convert markdown formatting to HTML for display"""
-    # Convert **bold** to <strong>
     text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
     
-    # Convert bullet points to HTML list
     lines = text.split('\n')
     formatted_lines = []
     in_list = False
@@ -342,7 +296,6 @@ def format_markdown_to_html(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         
-        # Check for bullet points
         if stripped.startswith('- ') or stripped.startswith('* '):
             if not in_list or list_type != 'ul':
                 if in_list:
@@ -351,7 +304,6 @@ def format_markdown_to_html(text: str) -> str:
                 in_list = True
                 list_type = 'ul'
             formatted_lines.append(f'<li>{stripped[2:]}</li>')
-        # Check for numbered lists
         elif re.match(r'^\d+\.\s', stripped):
             if not in_list or list_type != 'ol':
                 if in_list:
@@ -372,82 +324,136 @@ def format_markdown_to_html(text: str) -> str:
             else:
                 formatted_lines.append('<br>')
     
-    # Close any open lists
     if in_list:
         formatted_lines.append(f'</{list_type}>')
     
     return '\n'.join(formatted_lines)
 
 
+def get_ist_time(dt: datetime) -> str:
+    """Convert datetime to IST timezone string"""
+    ist = pytz.timezone('Asia/Kolkata')
+    if dt.tzinfo is None:
+        dt = pytz.utc.localize(dt)
+    ist_time = dt.astimezone(ist)
+    return ist_time.strftime("%B %d, %Y at %I:%M %p IST")
+
+
 # ==================== EMAIL FUNCTIONS ====================
 
 async def send_conversation_email(session: ConversationSession) -> bool:
-    """Send conversation transcript via Brevo API - ONLY user messages (no system notes)"""
+    """Send conversation transcript via Brevo API with location and token info"""
     
     if session.email_sent:
         print(f"Email already sent for session {session.session_id}")
         return True
     
-    # Format conversation history - FILTER OUT SYSTEM NOTES
+    brand = session.brand
+    brand_display = BRAND_NAMES.get(brand, brand.upper())
+    recipients_list = RECIPIENT_EMAILS.get(brand, RECIPIENT_EMAILS["gbpseo"])
+    
+    print(f"📧 Preparing email for {brand_display} session {session.session_id}")
+    print(f"   Total conversation items: {len(session.conversation_history)}")
+    
+    # Format conversation history
     conversation_html = ""
-    for msg in session.conversation_history:
+    message_count = 0
+    
+    for idx, msg in enumerate(session.conversation_history):
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
         
-        # Extract text content
         text_content = ""
         if isinstance(content, list):
-            text_content = " ".join([
-                item.get("text", "") for item in content 
-                if isinstance(item, dict) and item.get("type") == "input_text"
-            ])
+            for item in content:
+                if isinstance(item, dict):
+                    item_type = item.get("type", "")
+                    if item_type in ["input_text", "text", "output_text"]:
+                        text_content += item.get("text", "")
+                    elif "text" in item:
+                        text_content += item["text"]
         elif isinstance(content, str):
             text_content = content
         
-        # CRITICAL: Filter out system notes and internal markers
-        # Remove anything in square brackets [SYSTEM NOTE: ...] or [User uploaded file: ...]
-        text_content = re.sub(r'\[.*?\]', '', text_content).strip()
+        text_content = text_content.strip()
         
-        # Skip empty messages after filtering
-        if not text_content.strip():
+        if not text_content:
             continue
         
-        # Skip messages that are purely system-generated
-        if text_content.lower().startswith(("system note", "transferring to", "internal:")):
+        display_text = re.sub(r'\[SYSTEM NOTE:.*?\]', '', text_content, flags=re.IGNORECASE | re.DOTALL).strip()
+        display_text = re.sub(r'\[.*?uploaded file:.*?\]', '📎 Uploaded a file', display_text, flags=re.IGNORECASE).strip()
+        
+        if not display_text:
             continue
         
-        # Format based on role
         if role == "user":
             conversation_html += f"""
             <div style="margin: 15px 0; padding: 12px; background: #f0f0f0; border-radius: 8px; border-left: 4px solid #667eea;">
                 <div style="font-weight: bold; color: #667eea; margin-bottom: 5px;">User:</div>
-                <div style="color: #333;">{text_content}</div>
+                <div style="color: #333; white-space: pre-wrap;">{display_text}</div>
             </div>
             """
+            message_count += 1
+            
         elif role == "assistant":
-            formatted_content = format_markdown_to_html(text_content)
+            formatted_content = format_markdown_to_html(display_text)
             conversation_html += f"""
-            <div style="margin: 15px 0; padding: 12px; background: #ffffff; border-radius: 8px; border-left: 4px solid #4CAF50;">
+            <div style="margin: 15px 0; padding: 12px; background: #ffffff; border-radius: 8px; border-left: 4px solid #4CAF50; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
                 <div style="font-weight: bold; color: #4CAF50; margin-bottom: 5px;">Assistant:</div>
-                <div style="color: #333;">{formatted_content}</div>
+                <div style="color: #333; line-height: 1.6;">{formatted_content}</div>
             </div>
             """
+            message_count += 1
     
-    # Build user info section - only show collected information
+    print(f"   Formatted {message_count} messages for email")
+    
+    if not conversation_html:
+        conversation_html = "<div style='color: #999; padding: 20px; text-align: center;'>⚠️ No conversation data available</div>"
+    
+    # Build user info section
     user_info = session.user_context.model_dump()
     user_info_html = ""
-    collected_fields = 0
     
     for key, value in user_info.items():
         if value:
             label = key.replace('_', ' ').title()
             user_info_html += f"<div style='margin: 8px 0;'><strong>{label}:</strong> {value}</div>"
-            collected_fields += 1
     
-    if collected_fields == 0:
+    # CRITICAL FIX: Define location_str BEFORE using it
+    location_str = "Unknown"
+    if session.user_location:
+        location_data = session.user_location.model_dump()
+        if location_data.get('city') or location_data.get('country'):
+            location_str = f"{location_data.get('city', 'Unknown')}, {location_data.get('region', 'Unknown')}, {location_data.get('country', 'Unknown')}"
+            user_info_html += f"<div style='margin: 8px 0;'><strong>Location:</strong> {location_str}</div>"
+            if location_data.get('ip'):
+                user_info_html += f"<div style='margin: 8px 0;'><strong>IP Address:</strong> {location_data.get('ip')}</div>"
+    
+    if not user_info_html:
         user_info_html = "<div style='color: #999;'>No contact information collected</div>"
     
-    # Email HTML content (rest remains the same)
+    # Session details
+    created_ist = get_ist_time(session.created_at)
+    last_activity_ist = get_ist_time(session.last_activity)
+    duration_minutes = (session.last_activity - session.created_at).seconds // 60
+    
+    user_messages = len([m for m in session.conversation_history if m.get('role') == 'user'])
+    assistant_messages = len([m for m in session.conversation_history if m.get('role') == 'assistant'])
+    
+    session_details = f"""
+    <div class="meta">
+        <strong>Brand:</strong> {brand_display}<br>
+        <strong>Session ID:</strong> {session.session_id}<br>
+        <strong>Started:</strong> {created_ist}<br>
+        <strong>Last Activity:</strong> {last_activity_ist}<br>
+        <strong>Duration:</strong> {duration_minutes} minutes<br>
+        <strong>User Messages:</strong> {user_messages}<br>
+        <strong>Assistant Responses:</strong> {assistant_messages}<br>
+        <strong>Tokens Used (Last Response):</strong> {session.last_token_usage}
+    </div>
+    """
+    
+    # Email HTML content
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -508,7 +514,7 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     <body>
         <div class="container">
             <div class="header">
-                <h2>New Lead from GBPSEO Chatbot</h2>
+                <h2>New Lead from {brand_display} Chatbot</h2>
             </div>
             
             <div class="section">
@@ -518,12 +524,7 @@ async def send_conversation_email(session: ConversationSession) -> bool:
             
             <div class="section">
                 <h3>Session Details</h3>
-                <div class="meta">
-                    <strong>Session ID:</strong> {session.session_id}<br>
-                    <strong>Started:</strong> {session.created_at.strftime("%B %d, %Y at %I:%M %p")}<br>
-                    <strong>Duration:</strong> {(session.last_activity - session.created_at).seconds // 60} minutes<br>
-                    <strong>Total Messages:</strong> {len([m for m in session.conversation_history if m.get('role') in ['user', 'assistant']])}
-                </div>
+                {session_details}
             </div>
             
             <div class="conversation">
@@ -532,20 +533,23 @@ async def send_conversation_email(session: ConversationSession) -> bool:
             </div>
             
             <div class="footer">
-                GBPSEO.in - Automated Chatbot System<br>
-                Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}
+                {brand_display} - Automated Chatbot System<br>
+                Generated on {get_ist_time(datetime.now())}
             </div>
         </div>
     </body>
     </html>
     """
     
-    recipients = [{"email": email, "name": "GBPSEO Team"} for email in RECIPIENT_EMAILS]
+    recipients = [{"email": email, "name": f"{brand_display} Team"} for email in recipients_list]
+    
+    # Use verified sender email based on brand
+    sender_email = "noreply@gbpseo.in" if brand == "gbpseo" else "noreply@gbpseo.in"
     
     payload = {
-        "sender": {"name": "GBPSEO Chatbot", "email": "noreply@gbpseo.in"},
+        "sender": {"name": f"{brand_display} Chatbot", "email": sender_email},
         "to": recipients,
-        "subject": f"New Lead: {session.user_context.name or 'Anonymous'} - {session.session_id[:8]}",
+        "subject": f"New Lead From {brand_display} Chatbot : {session.user_context.name or 'Anonymous'} - {location_str}",
         "htmlContent": html_content
     }
     
@@ -555,6 +559,13 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         "api-key": BREVO_API_KEY
     }
     
+    # Debug: Print email details before sending
+    print(f"📧 Email Details:")
+    print(f"   Brand: {brand_display}")
+    print(f"   Recipients: {[r['email'] for r in recipients]}")
+    print(f"   Subject: {payload['subject']}")
+    print(f"   API Key: {'*' * 20}{BREVO_API_KEY[-10:]}")
+    
     max_retries = 3
     retry_delay = 2
     
@@ -562,20 +573,27 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 response = await client.post(BREVO_API_URL, json=payload, headers=headers)
+                
+                print(f"📤 Brevo API Response Status: {response.status_code}")
+                print(f"📤 Brevo API Response: {response.text}")
+                
                 response.raise_for_status()
                 
                 session.email_sent = True
-                print(f"✅ Email sent successfully for session {session.session_id} (attempt {attempt + 1})")
+                print(f"✅ Email sent successfully for {brand_display} session {session.session_id} (attempt {attempt + 1})")
                 return True
         
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
             print(f"⚠️ Email timeout for session {session.session_id} (attempt {attempt + 1}/{max_retries})")
+            print(f"   Error: {str(e)}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
                 continue
         
         except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP error for session {session.session_id}: {e.response.status_code} - {e.response.text}")
+            print(f"❌ HTTP error for session {session.session_id}: {e.response.status_code}")
+            print(f"   Response text: {e.response.text}")
+            print(f"   Request URL: {e.request.url}")
             if attempt < max_retries - 1 and e.response.status_code >= 500:
                 await asyncio.sleep(retry_delay)
                 continue
@@ -583,6 +601,9 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         
         except Exception as e:
             print(f"❌ Unexpected error sending email for session {session.session_id}: {e}")
+            print(f"   Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
                 continue
@@ -591,10 +612,9 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     return False
 
 
-
 # ==================== FASTAPI APP ====================
 
-app = FastAPI(title="GBPSEO Chatbot System", version="2.0.0")
+app = FastAPI(title="Multi-Brand Chatbot System", version="2.0.0")
 app.mount("/imgs", StaticFiles(directory="imgs"), name="imgs")
 
 app.add_middleware(
@@ -631,13 +651,33 @@ async def health_check():
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(chat_msg: ChatMessage):
-    """Main chat endpoint with improved user info extraction"""
+    """Main chat endpoint with user info and location tracking"""
     
     try:
-        session = get_or_create_session(chat_msg.session_id)
+        # Determine brand from request
+        brand = chat_msg.brand or "gbpseo"
         
-        # Extract user information BEFORE adding to history
-        extract_user_info(chat_msg.message, session)
+        # Get or create session with brand
+        session = get_or_create_session(chat_msg.session_id, brand)
+        
+        # Store user info from frontend
+        if chat_msg.user_info:
+            if chat_msg.user_info.get('name'):
+                session.user_context.name = chat_msg.user_info['name']
+            if chat_msg.user_info.get('email'):
+                session.user_context.email = chat_msg.user_info['email']
+            if chat_msg.user_info.get('phone'):
+                session.user_context.phone = chat_msg.user_info['phone']
+        
+        # Store location info from frontend
+        if chat_msg.user_location:
+            session.user_location.ip = chat_msg.user_location.get('ip')
+            session.user_location.city = chat_msg.user_location.get('city')
+            session.user_location.region = chat_msg.user_location.get('region')
+            session.user_location.country = chat_msg.user_location.get('country')
+        
+        # Extract phone from message if provided
+        extract_phone_from_message(chat_msg.message, session)
         
         # Add user message to history
         user_message: TResponseInputItem = {
@@ -646,106 +686,153 @@ async def chat(chat_msg: ChatMessage):
         }
         session.conversation_history.append(user_message)
         
-        # Build context about what's STILL missing (only ask for remaining fields)
-        contact_context = ""
-        if not has_all_contact_details(session):
+        # Build context for agent
+        phone_context = ""
+        if not session.user_context.phone:
             session.contact_ask_count += 1
-            missing = get_missing_contact_fields(session)
-            
-            # Tell agent what we already have and what's still needed
-            collected = []
-            if session.user_context.name:
-                collected.append("name")
-            if session.user_context.email:
-                collected.append("email")
-            if session.user_context.phone:
-                collected.append("phone")
-            
-            if collected:
-                contact_context = f"\n\n[SYSTEM NOTE: Already collected: {', '.join(collected)}. Still need: {', '.join(missing)}. ONLY ask for the missing fields: {', '.join(missing)}.]"
-            else:
-                contact_context = f"\n\n[SYSTEM NOTE: User is missing all contact details: {', '.join(missing)}. You MUST ask for these details at the end of your response.]"
+            if session.contact_ask_count <= 5:
+                phone_context = "\n\n[SYSTEM NOTE: User hasn't provided phone number yet. Ask professionally at the end of your response.]"
         
         # Prepare input with context
         agent_input = session.conversation_history.copy()
-        if contact_context:
+        if phone_context:
             last_msg = agent_input[-1]
             if isinstance(last_msg["content"], list):
-                last_msg["content"][0]["text"] += contact_context
+                last_msg["content"][0]["text"] += phone_context
+        
+        # Get the appropriate agent based on brand
+        current_agent = AGENTS.get(brand, gbp_agent)
         
         # Run agent with retry logic
         max_attempts = 2
         response_text = ""
-        
+        token_usage = 0
+
         for attempt in range(max_attempts):
             try:
                 result = await Runner.run(
-                    gbp_agent,
+                    current_agent,
                     input=agent_input,
                     run_config=RunConfig(
                         trace_metadata={
-                            "__trace_source__": "gbpseo-chatbot",
+                            "__trace_source__": f"{brand}-chatbot",
                             "session_id": session.session_id,
+                            "brand": brand
                         }
                     )
                 )
                 
-                # Extract response with better handling
+                # IMPROVED: Extract response text with multiple fallback methods
+                response_text = ""
+                
                 for item in result.new_items:
                     if isinstance(item, MessageOutputItem):
+                        # Method 1: Try the helper function
                         text = ItemHelpers.text_message_output(item)
-                        # Filter out system notes and transfers
-                        if text and not text.startswith("[") and "transfer" not in text.lower():
+                        if text:
                             response_text += text + " "
+                        else:
+                            # Method 2: Try direct content extraction
+                            if hasattr(item, 'content') and item.content:
+                                if isinstance(item.content, list):
+                                    for content_item in item.content:
+                                        if isinstance(content_item, dict):
+                                            # Check for text in various formats
+                                            if 'text' in content_item:
+                                                response_text += content_item['text'] + " "
+                                            elif 'output_text' in content_item:
+                                                response_text += content_item['output_text'] + " "
+                                        elif hasattr(content_item, 'text'):
+                                            response_text += content_item.text + " "
+                                elif isinstance(item.content, str):
+                                    response_text += item.content + " "
                 
+                # Clean up the response
                 response_text = response_text.strip()
                 
-                # Remove any remaining system notes
-                response_text = re.sub(r'\[.*?\]', '', response_text).strip()
+                # Remove system notes and internal markers
+                response_text = re.sub(r'\[SYSTEM NOTE:.*?\]', '', response_text, flags=re.IGNORECASE | re.DOTALL)
+                response_text = re.sub(r'\[.*?transfer.*?\]', '', response_text, flags=re.IGNORECASE)
+                response_text = response_text.strip()
                 
-                # If response is too short or empty, try again
+                # Debug logging
+                print(f"🔍 Response extraction (attempt {attempt + 1}):")
+                print(f"   Raw response length: {len(response_text)}")
+                print(f"   Response preview: {response_text[:100]}...")
+                
+                # Extract token usage
+                try:
+                    token_usage = 0
+                    
+                    if hasattr(result, 'raw_responses') and result.raw_responses:
+                        raw_resp = result.raw_responses[-1]
+                        
+                        if hasattr(raw_resp, 'usage'):
+                            usage_obj = raw_resp.usage
+                            
+                            if hasattr(usage_obj, 'output_tokens'):
+                                token_usage = usage_obj.output_tokens
+                            elif hasattr(usage_obj, 'total_tokens'):
+                                token_usage = usage_obj.total_tokens
+                        
+                        elif isinstance(raw_resp, dict) and 'usage' in raw_resp:
+                            usage_data = raw_resp['usage']
+                            token_usage = usage_data.get('output_tokens') or usage_data.get('total_tokens', 0)
+                    
+                    print(f"🔢 Token usage for this request: {token_usage}")
+                    
+                except Exception as token_error:
+                    print(f"⚠️ Error extracting tokens: {token_error}")
+                    token_usage = 0
+                
+                # If response is too short, try again
                 if len(response_text) < 10 and attempt < max_attempts - 1:
-                    print(f"⚠️ Short response detected (attempt {attempt + 1}), retrying...")
+                    print(f"⚠️ Short response detected, retrying...")
                     await asyncio.sleep(0.5)
                     continue
                 
-                # Update conversation history with agent response
+                # IMPORTANT: Add to conversation history BEFORE any modifications
                 session.conversation_history.extend([
                     item.to_input_item() for item in result.new_items
                 ])
                 
+                # Success - exit retry loop
                 break
                 
             except Exception as e:
                 print(f"❌ Agent error (attempt {attempt + 1}/{max_attempts}): {e}")
+                import traceback
+                traceback.print_exc()
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(1)
                     continue
                 raise
-        
-        # Fallback if still empty
+
+        # Store token usage
+        session.last_token_usage = token_usage
+
+        # Fallback if empty - but log this as it shouldn't happen often
+        brand_display = BRAND_NAMES.get(brand, brand.upper())
         if not response_text or len(response_text) < 10:
-            response_text = "Thank you for your message. I'm here to help you with Google Business Profile optimization. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
+            print(f"⚠️ WARNING: Using fallback response for session {session.session_id}")
+            print(f"   User message was: {chat_msg.message}")
             
-            # Add contact request for ONLY missing fields
-            if not has_all_contact_details(session):
-                response_text += get_missing_contact_prompt(session)
-        
-        # Ensure ONLY missing contact details are requested
-        elif not has_all_contact_details(session) and session.contact_ask_count <= 5:
-            contact_prompt = get_missing_contact_prompt(session)
-            # Only add if we haven't already asked in this response
-            if contact_prompt:
-                # Check if we're already asking for the missing fields
-                missing_fields = get_missing_contact_fields(session)
-                already_asking = any(field in response_text.lower() for field in missing_fields)
-                
-                if not already_asking:
-                    response_text += contact_prompt
-        
-        # Format response for HTML display
+            if brand == "whitedigital":
+                response_text = f"Thank you for your message. I'm here to help you with PPC advertising and digital marketing services from {brand_display}. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
+            else:
+                response_text = f"Thank you for your message. I'm here to help you with Google Business Profile optimization from {brand_display}. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
+            
+            if not session.user_context.phone and session.contact_ask_count <= 5:
+                response_text += "\n\nIf you'd like our team to contact you directly, feel free to share your phone number."
+
+        # Add phone request if missing (only if we got a real response)
+        elif not session.user_context.phone and session.contact_ask_count <= 5:
+            if "phone" not in response_text.lower() and "contact number" not in response_text.lower():
+                response_text += "\n\nIf you'd like our team to contact you directly, feel free to share your phone number."
+
+        # Format response for HTML
         formatted_response = format_markdown_to_html(response_text)
-        
+
         return ChatResponse(
             response=response_text,
             session_id=session.session_id,
@@ -758,9 +845,14 @@ async def chat(chat_msg: ChatMessage):
         import traceback
         traceback.print_exc()
         
-        # Return a friendly error message instead of failing
-        session = get_or_create_session(chat_msg.session_id)
-        fallback_response = "I apologize, but I'm experiencing a technical issue. Please try asking your question again, or let me know how I can help you with Google Business Profile services."
+        brand = chat_msg.brand or "gbpseo"
+        session = get_or_create_session(chat_msg.session_id, brand)
+        brand_display = BRAND_NAMES.get(brand, brand.upper())
+        
+        if brand == "whitedigital":
+            fallback_response = f"I apologize, but I'm experiencing a technical issue. Please try asking your question again, or let me know how I can help you with PPC advertising and digital marketing services from {brand_display}."
+        else:
+            fallback_response = f"I apologize, but I'm experiencing a technical issue. Please try asking your question again, or let me know how I can help you with Google Business Profile services from {brand_display}."
         
         return ChatResponse(
             response=fallback_response,
@@ -771,9 +863,41 @@ async def chat(chat_msg: ChatMessage):
 
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), session_id: str = None):
-    """Handle file uploads"""
-    session = get_or_create_session(session_id)
+async def upload_file(
+    file: UploadFile = File(...), 
+    session_id: str = Form(None),
+    user_info: str = Form(None),
+    user_location: str = Form(None),
+    brand: str = Form("gbpseo")
+):
+    """Handle file uploads with user info"""
+    import json
+    
+    session = get_or_create_session(session_id, brand)
+    
+    # Update user info if provided
+    if user_info:
+        try:
+            info = json.loads(user_info)
+            if info.get('name'):
+                session.user_context.name = info['name']
+            if info.get('email'):
+                session.user_context.email = info['email']
+            if info.get('phone'):
+                session.user_context.phone = info['phone']
+        except:
+            pass
+    
+    # Update location if provided
+    if user_location:
+        try:
+            loc = json.loads(user_location)
+            session.user_location.ip = loc.get('ip')
+            session.user_location.city = loc.get('city')
+            session.user_location.region = loc.get('region')
+            session.user_location.country = loc.get('country')
+        except:
+            pass
     
     file_content = await file.read()
     
@@ -793,15 +917,13 @@ async def upload_file(file: UploadFile = File(...), session_id: str = None):
 
 @app.post("/api/end-session")
 async def end_session(request: Request):
-    """End session and send conversation via email"""
+    """End session and send conversation via email with location and token info"""
     try:
-        # Handle both JSON and sendBeacon (blob) requests
         content_type = request.headers.get("content-type", "")
         
         if "application/json" in content_type:
             body = await request.json()
         else:
-            # Handle sendBeacon blob data
             body_bytes = await request.body()
             import json
             body = json.loads(body_bytes.decode('utf-8'))
@@ -821,6 +943,24 @@ async def end_session(request: Request):
         
         session = active_sessions[session_id]
         
+        # Update user info from request if provided
+        if body.get("user_info"):
+            info = body["user_info"]
+            if info.get('name'):
+                session.user_context.name = info['name']
+            if info.get('email'):
+                session.user_context.email = info['email']
+            if info.get('phone'):
+                session.user_context.phone = info['phone']
+        
+        # Update location from request if provided
+        if body.get("user_location"):
+            loc = body["user_location"]
+            session.user_location.ip = loc.get('ip')
+            session.user_location.city = loc.get('city')
+            session.user_location.region = loc.get('region')
+            session.user_location.country = loc.get('country')
+        
         # Check if we have enough messages
         if len(session.conversation_history) < 3:
             print(f"ℹ️ Session {session_id} has insufficient messages ({len(session.conversation_history)})")
@@ -831,17 +971,15 @@ async def end_session(request: Request):
                 "message": "Insufficient messages for email"
             })
         
-        # Send email asynchronously (will check if already sent)
+        # Send email
         print(f"📧 Attempting to send email for session {session_id}...")
         email_sent = await send_conversation_email(session)
         
         if email_sent:
             print(f"✅ Email sent successfully for session {session_id}")
-            # Clean up session
             del active_sessions[session_id]
         else:
             print(f"❌ Failed to send email for session {session_id}")
-        
         
         return JSONResponse({
             "status": "success",
@@ -856,7 +994,6 @@ async def end_session(request: Request):
         import traceback
         traceback.print_exc()
         
-        # Don't raise exception for sendBeacon requests
         return JSONResponse({
             "status": "error",
             "email_sent": False,
@@ -875,10 +1012,13 @@ async def get_session(session_id: str):
     
     return JSONResponse({
         "session_id": session.session_id,
+        "brand": session.brand,
         "user_context": session.user_context.model_dump(),
+        "user_location": session.user_location.model_dump(),
         "message_count": len(session.conversation_history),
         "created_at": session.created_at.isoformat(),
-        "email_sent": session.email_sent
+        "email_sent": session.email_sent,
+        "last_token_usage": session.last_token_usage
     })
 
 
@@ -890,10 +1030,12 @@ if __name__ == "__main__":
     os.makedirs("templates", exist_ok=True)
     
     print("=" * 50)
-    print("GBPSEO Chatbot System Starting...")
+    print("Multi-Brand Chatbot System Starting...")
     print(f"Port: {PORT}")
     print(f"URL: http://localhost:{PORT}")
-    print(f"Recipients: {', '.join(RECIPIENT_EMAILS)}")
+    print(f"Supported Brands: GBPSEO, WhiteDigital")
+    print(f"GBPSEO Recipients: {', '.join(RECIPIENT_EMAILS['gbpseo'])}")
+    print(f"WhiteDigital Recipients: {', '.join(RECIPIENT_EMAILS['whitedigital'])}")
     print("=" * 50)
     
     uvicorn.run(app, host="0.0.0.0", port=PORT)
