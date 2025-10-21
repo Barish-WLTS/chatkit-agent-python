@@ -35,7 +35,7 @@ BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 RECIPIENT_EMAILS = {
     "gbpseo": [
         "barishwlts@gmail.com",
-        "rim.wlts@gmail.com"
+        "hello@gbpseo.in"
     ],
     "whitedigital": [
         "barishwlts@gmail.com",
