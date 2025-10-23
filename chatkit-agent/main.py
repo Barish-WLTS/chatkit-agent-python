@@ -39,7 +39,7 @@ from agents import (
 SMTP_HOST = os.getenv("SMTP_HOST", "mail.gbpseo.in")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SSL port
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "chatbot@gbpseo.in")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "chatbot@2025")  # Replace with actual password
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "your_password")  # Replace with actual password
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "chatbot@gbpseo.in")
 SMTP_FROM_NAME = "Chatbot"
 
