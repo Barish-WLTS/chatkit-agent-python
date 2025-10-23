@@ -14,6 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 from agents import (
     Agent,
@@ -28,8 +31,17 @@ from agents import (
 
 # ==================== CONFIGURATION ====================
 
-BREVO_API_KEY = os.getenv("BREVO_API_KEY", "your_brevo_api_key_here")
-BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+# BREVO_API_KEY = os.getenv("BREVO_API_KEY", "your_brevo_api_key_here")
+# BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+
+# ==================== SMTP CONFIGURATION ====================
+
+SMTP_HOST = os.getenv("SMTP_HOST", "mail.gbpseo.in")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SSL port
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "chatbot@gbpseo.in")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "chatbot@2025")  # Replace with actual password
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "chatbot@gbpseo.in")
+SMTP_FROM_NAME = "Chatbot"
 
 # Recipient emails per brand
 RECIPIENT_EMAILS = {
@@ -122,13 +134,14 @@ CRITICAL RESPONSE RULES:
 - If you're not sure, still provide your best answer based on GBP knowledge
 - Use proper markdown formatting in ALL responses
 
-PHONE NUMBER COLLECTION:
-- The user has already provided their name and email
-- In EVERY response, professionally ask for their phone number at the END
-- Use natural, non-pushy language like:
-  * "If you'd like our team to contact you directly, feel free to share your phone number."
-  * "For faster assistance, you can also provide your phone number if you'd like a callback."
-  * "Should you need direct support, please share your contact number."
+CONTACT INFORMATION HANDLING:
+- If the user provides their contact information (phone number, mobile number) AND requests a callback or asks to connect with the team, acknowledge professionally
+- Use responses like:
+  * "Thank you for sharing your contact details. Our team will reach out to you shortly to discuss your GBP needs."
+  * "I've noted your contact information. One of our GBP specialists will get in touch with you soon to assist further."
+  * "Great! Our team will contact you within the next business day to help you get started."
+- Only mention team contact if the user explicitly asks for it or requests a callback
+- Do NOT proactively ask for contact information
 
 IMPORTANT FORMATTING RULES:
 - Use proper markdown formatting in your responses
@@ -141,8 +154,8 @@ IMPORTANT FORMATTING RULES:
 Tone Guidelines:
 - Be clear and polite
 - Avoid jargon unless the user is already technical
-- End with a friendly CTA or question about phone number
-- ALWAYS provide value before asking for information
+- End with a friendly CTA or helpful closing
+- ALWAYS provide value in every response
 
 Do not:
 - Give exact pricing unless it's publicly listed
@@ -190,14 +203,15 @@ CRITICAL RESPONSE RULES:
 - If unsure about something, still offer your best insight based on PPC best practices
 - Always be confident, data-informed, and results-focused
 
-PHONE NUMBER COLLECTION:
-- The user has already provided their name and email
-- In every response, professionally and naturally ask for their phone number
-- Use any of the following styles:
-  * "If you'd like faster assistance, please share your phone number and our PPC expert will reach out."
-  * "Would you like us to schedule a free PPC audit call? You can share your contact number for direct assistance."
-  * "For personalized advice, feel free to provide your phone number and we'll connect you with our campaign strategist."
-- This must be included at the end of every response, but never sound forceful
+CONTACT INFORMATION HANDLING:
+- If the user provides their contact information (phone number, email) AND requests a callback or asks to connect with the team, acknowledge professionally
+- Use responses like:
+  * "Thank you for sharing your contact details. Our PPC team will reach out to you shortly to discuss your campaign needs."
+  * "I've noted your information. One of our PPC specialists will contact you soon to schedule your free audit."
+  * "Perfect! Our team will get in touch with you within the next business day to help optimize your campaigns."
+  * "Great! We'll have one of our campaign strategists reach out to you soon for a personalized consultation."
+- Only mention team contact if the user explicitly asks for it or requests a callback
+- Do NOT proactively ask for contact information
 
 FORMATTING AND STRUCTURE RULES:
 - Use Markdown formatting for all responses
@@ -212,7 +226,7 @@ Tone Guidelines:
 - Sound like a human expert, not a chatbot
 - Avoid exaggerated promises or unrealistic timelines
 - Use friendly CTAs — like offering a free audit or a discovery call
-- Always deliver real PPC insight or advice before requesting user details
+- Always deliver real PPC insight or advice in every response
 
 Do Not:
 - Return empty, one-line, or generic answers
@@ -220,8 +234,9 @@ Do Not:
 - Use emojis or casual slang
 - Mention or guess pricing unless it's publicly visible
 - Make unverifiable claims such as "#1 ranking guaranteed"
+- Ask for contact information unless the user indicates they want to be contacted
 
-Goal: Help users understand whiteDigital's PPC services, build trust, guide them to book a Free PPC Audit, and collect their phone number.""",
+Goal: Help users understand whiteDigital's PPC services, build trust, guide them to book a Free PPC Audit, and provide expert PPC advice.""",
     model="gpt-4.1-nano",
     tools=[whitedigital_file_search],
     model_settings=ModelSettings(
@@ -342,7 +357,7 @@ def get_ist_time(dt: datetime) -> str:
 # ==================== EMAIL FUNCTIONS ====================
 
 async def send_conversation_email(session: ConversationSession) -> bool:
-    """Send conversation transcript via Brevo API with location and token info"""
+    """Send conversation transcript via SMTP using mail.gbpseo.in"""
     
     if session.email_sent:
         print(f"Email already sent for session {session.session_id}")
@@ -419,7 +434,7 @@ async def send_conversation_email(session: ConversationSession) -> bool:
             label = key.replace('_', ' ').title()
             user_info_html += f"<div style='margin: 8px 0;'><strong>{label}:</strong> {value}</div>"
     
-    # CRITICAL FIX: Define location_str BEFORE using it
+    # Location info
     location_str = "Unknown"
     if session.user_location:
         location_data = session.user_location.model_dump()
@@ -541,60 +556,57 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     </html>
     """
     
-    recipients = [{"email": email, "name": f"{brand_display} Team"} for email in recipients_list]
+    # Create email message
+    subject = f"New Lead From {brand_display} Chatbot: {session.user_context.name or 'Anonymous'} - {location_str}"
     
-    # Use verified sender email based on brand
-    sender_email = "noreply@gbpseo.in" if brand == "gbpseo" else "noreply@gbpseo.in"
-    
-    payload = {
-        "sender": {"name": f"{brand_display} Chatbot", "email": sender_email},
-        "to": recipients,
-        "subject": f"New Lead From {brand_display} Chatbot : {session.user_context.name or 'Anonymous'} - {location_str}",
-        "htmlContent": html_content
-    }
-    
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "api-key": BREVO_API_KEY
-    }
-    
-    # Debug: Print email details before sending
-    print(f"📧 Email Details:")
-    print(f"   Brand: {brand_display}")
-    print(f"   Recipients: {[r['email'] for r in recipients]}")
-    print(f"   Subject: {payload['subject']}")
-    print(f"   API Key: {'*' * 20}{BREVO_API_KEY[-10:]}")
-    
+    # Retry logic
     max_retries = 3
     retry_delay = 2
     
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(BREVO_API_URL, json=payload, headers=headers)
-                
-                print(f"📤 Brevo API Response Status: {response.status_code}")
-                print(f"📤 Brevo API Response: {response.text}")
-                
-                response.raise_for_status()
-                
-                session.email_sent = True
-                print(f"✅ Email sent successfully for {brand_display} session {session.session_id} (attempt {attempt + 1})")
-                return True
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = f"{brand_display} {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
+            msg['To'] = ", ".join(recipients_list)
+            
+            # Attach HTML content
+            html_part = MIMEText(html_content, 'html')
+            msg.attach(html_part)
+            
+            # Connect to SMTP server using SSL (port 465)
+            print(f"📤 Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
+            
+            # Use SMTP_SSL for port 465
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15)
+            
+            # Enable debug output (optional - comment out in production)
+            # server.set_debuglevel(1)
+            
+            # Login with full email address as username
+            print(f"🔐 Logging in as: {SMTP_USERNAME}")
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            
+            # Send email
+            print(f"📬 Sending email to: {', '.join(recipients_list)}")
+            server.send_message(msg)
+            server.quit()
+            
+            session.email_sent = True
+            print(f"✅ Email sent successfully for {brand_display} session {session.session_id} (attempt {attempt + 1})")
+            return True
         
-        except httpx.TimeoutException as e:
-            print(f"⚠️ Email timeout for session {session.session_id} (attempt {attempt + 1}/{max_retries})")
-            print(f"   Error: {str(e)}")
+        except smtplib.SMTPAuthenticationError as e:
+            print(f"❌ SMTP Authentication failed: {e}")
+            print(f"   Username: {SMTP_USERNAME}")
+            print(f"   Server: {SMTP_HOST}:{SMTP_PORT}")
+            print(f"   Please verify your email credentials")
+            break  # Don't retry auth errors
+        
+        except smtplib.SMTPException as e:
+            print(f"⚠️ SMTP error for session {session.session_id} (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay)
-                continue
-        
-        except httpx.HTTPStatusError as e:
-            print(f"❌ HTTP error for session {session.session_id}: {e.response.status_code}")
-            print(f"   Response text: {e.response.text}")
-            print(f"   Request URL: {e.request.url}")
-            if attempt < max_retries - 1 and e.response.status_code >= 500:
                 await asyncio.sleep(retry_delay)
                 continue
             break
@@ -615,6 +627,9 @@ async def send_conversation_email(session: ConversationSession) -> bool:
 # ==================== FASTAPI APP ====================
 
 app = FastAPI(title="Multi-Brand Chatbot System", version="2.0.0")
+os.makedirs("imgs", exist_ok=True)
+
+# Mount the imgs folder
 app.mount("/imgs", StaticFiles(directory="imgs"), name="imgs")
 
 app.add_middleware(
@@ -686,19 +701,8 @@ async def chat(chat_msg: ChatMessage):
         }
         session.conversation_history.append(user_message)
         
-        # Build context for agent
-        phone_context = ""
-        if not session.user_context.phone:
-            session.contact_ask_count += 1
-            if session.contact_ask_count <= 5:
-                phone_context = "\n\n[SYSTEM NOTE: User hasn't provided phone number yet. Ask professionally at the end of your response.]"
-        
-        # Prepare input with context
+        # Prepare input without phone context
         agent_input = session.conversation_history.copy()
-        if phone_context:
-            last_msg = agent_input[-1]
-            if isinstance(last_msg["content"], list):
-                last_msg["content"][0]["text"] += phone_context
         
         # Get the appropriate agent based on brand
         current_agent = AGENTS.get(brand, gbp_agent)
@@ -821,14 +825,6 @@ async def chat(chat_msg: ChatMessage):
                 response_text = f"Thank you for your message. I'm here to help you with PPC advertising and digital marketing services from {brand_display}. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
             else:
                 response_text = f"Thank you for your message. I'm here to help you with Google Business Profile optimization from {brand_display}. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
-            
-            if not session.user_context.phone and session.contact_ask_count <= 5:
-                response_text += "\n\nIf you'd like our team to contact you directly, feel free to share your phone number."
-
-        # Add phone request if missing (only if we got a real response)
-        elif not session.user_context.phone and session.contact_ask_count <= 5:
-            if "phone" not in response_text.lower() and "contact number" not in response_text.lower():
-                response_text += "\n\nIf you'd like our team to contact you directly, feel free to share your phone number."
 
         # Format response for HTML
         formatted_response = format_markdown_to_html(response_text)
@@ -860,7 +856,6 @@ async def chat(chat_msg: ChatMessage):
             user_context=session.user_context.model_dump(),
             formatted_response=format_markdown_to_html(fallback_response)
         )
-
 
 @app.post("/api/upload")
 async def upload_file(

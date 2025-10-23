@@ -146,13 +146,20 @@
         .message-avatar {
             width: 36px;
             height: 36px;
-            border-radius: 8px;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 600;
             font-size: 14px;
             flex-shrink: 0;
+            overflow: hidden;
+        }
+
+        .message-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .message.user .message-avatar {
@@ -733,12 +740,7 @@
             </div>
 
             <div class="chat-messages" id="chatMessages">
-                <div class="message assistant">
-                    <div class="message-avatar">A</div>
-                    <div class="message-content">
-                        <p id="welcomeMessage">Hello! I'm your support assistant. How can I help you today?</p>
-                    </div>
-                </div>
+                
             </div>
 
             <div class="chat-input-area">
@@ -842,14 +844,6 @@
             return 'gbpseo';
         }
 
-        function updateWelcomeMessage(brand) {
-            const welcomeEl = document.getElementById('welcomeMessage');
-            if (brand === 'whitedigital') {
-                welcomeEl.textContent = "Hello! I'm your whiteDigital support assistant specializing in PPC advertising and digital marketing. How can I help you today?";
-            } else {
-                welcomeEl.textContent = "Hello! I'm your GBPSEO support assistant specializing in Google Business Profile optimization. How can I help you today?";
-            }
-        }
 
         async function getUserLocation() {
             try {
@@ -951,7 +945,17 @@
             
             const avatar = document.createElement('div');
             avatar.className = 'message-avatar';
-            avatar.textContent = isUser ? 'U' : 'A';
+            
+            if (isUser) {
+                avatar.textContent = 'U';
+            } else {
+                const avatarImg = document.createElement('img');
+                avatarImg.src = currentBrand === 'whitedigital' 
+                    ? '/imgs/whitedigital-logo.jpg' 
+                    : '/imgs/gbpseo-moscot.webp';
+                avatarImg.alt = currentBrand === 'whitedigital' ? 'WhiteDigital' : 'GBPSEO';
+                avatar.appendChild(avatarImg);
+            }
             
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
@@ -989,7 +993,12 @@
             
             const avatar = document.createElement('div');
             avatar.className = 'message-avatar';
-            avatar.textContent = 'A';
+            const avatarImg = document.createElement('img');
+            avatarImg.src = currentBrand === 'whitedigital' 
+                ? '/imgs/whitedigital-logo.jpg' 
+                : '/imgs/gbpseo-moscot.webp';
+            avatarImg.alt = currentBrand === 'whitedigital' ? 'WhiteDigital' : 'GBPSEO';
+            avatar.appendChild(avatarImg);
             
             const indicator = document.createElement('div');
             indicator.className = 'typing-indicator active';
@@ -1202,7 +1211,6 @@
             }
             if (session.brand) {
                 currentBrand = session.brand;
-                updateWelcomeMessage(currentBrand);
             }
             
             const messagesContainer = document.getElementById('chatMessages');
@@ -1295,6 +1303,10 @@
         });
 
         document.addEventListener('DOMContentLoaded', async () => {
+            // Detect brand FIRST before anything else
+            currentBrand = detectBrand();
+            console.log('Detected brand:', currentBrand);
+            
             const savedUserInfo = sessionStorage.getItem('userContactInfo');
             
             if (savedUserInfo) {
@@ -1302,14 +1314,21 @@
                 userInfo = saved;
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendBtn').disabled = false;
+                
+                // Show welcome message if conversation area is empty (reload/new tab scenario)
+                const messagesContainer = document.getElementById('chatMessages');
+                if (messagesContainer.children.length === 0) {
+                    const brandDisplay = currentBrand === 'whitedigital' ? 'whiteDigital' : 'GBPSEO';
+                    const serviceType = currentBrand === 'whitedigital' 
+                        ? 'PPC advertising and digital marketing' 
+                        : 'Google Business Profile optimization';
+                    
+                    addMessage('<p>Welcome back, ' + saved.name + '! I\'m here to help you with ' + serviceType + '. What would you like to know about our services?</p>', false);
+                }
             } else {
                 document.getElementById('contactModal').classList.add('visible');
             }
             
-            currentBrand = detectBrand();
-            console.log('Detected brand:', currentBrand);
-            
-            updateWelcomeMessage(currentBrand);
             
             await getUserLocation();
             
