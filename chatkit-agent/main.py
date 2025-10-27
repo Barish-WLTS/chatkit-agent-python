@@ -39,7 +39,7 @@ from agents import (
 SMTP_HOST = os.getenv("SMTP_HOST", "mail.gbpseo.in")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SSL port
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "chatbot@gbpseo.in")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "your_password")  # Replace with actual password
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "smtp_password")  # Replace with actual password
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "chatbot@gbpseo.in")
 SMTP_FROM_NAME = "Chatbot"
 
@@ -51,11 +51,14 @@ RECIPIENT_EMAILS = {
     ],
     "whitedigital": [
         "barishwlts@gmail.com",
-        "info@whitedigital.in"
+        "info@whitedigital.in",
+        "gunanadar@gmail.com"
+
     ]
 }
 
 PORT = 3000
+MAX_CONTEXT_MESSAGES = 10
 
 # ==================== MODELS ====================
 
@@ -89,6 +92,10 @@ class ConversationSession(BaseModel):
     email_sent: bool = False
     contact_ask_count: int = 0
     last_token_usage: int = 0
+    last_input_tokens: int = 0
+    last_output_tokens: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
 
 
 class ChatMessage(BaseModel):
@@ -464,8 +471,13 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         <strong>Duration:</strong> {duration_minutes} minutes<br>
         <strong>User Messages:</strong> {user_messages}<br>
         <strong>Assistant Responses:</strong> {assistant_messages}<br>
-        <strong>Tokens Used (Last Response):</strong> {session.last_token_usage}
-    </div>
+        <strong>Last Input Tokens:</strong> {session.last_input_tokens}<br>
+        <strong>Last Output Tokens:</strong> {session.last_output_tokens}<br>
+        <strong>Last Total Tokens:</strong> {session.last_token_usage}<br>
+        <strong>Total Input Tokens (Conversation):</strong> {session.total_input_tokens}<br>
+        <strong>Total Output Tokens (Conversation):</strong> {session.total_output_tokens}<br>
+        <strong>Grand Total Tokens:</strong> {session.total_input_tokens + session.total_output_tokens}
+        </div>
     """
     
     # Email HTML content
@@ -701,8 +713,13 @@ async def chat(chat_msg: ChatMessage):
         }
         session.conversation_history.append(user_message)
         
-        # Prepare input without phone context
-        agent_input = session.conversation_history.copy()
+        # Prepare input with limited conversation history to reduce tokens
+        if len(session.conversation_history) > MAX_CONTEXT_MESSAGES:
+            # Keep the most recent messages
+            agent_input = session.conversation_history[-MAX_CONTEXT_MESSAGES:]
+            print(f"📊 Limited conversation history: {len(session.conversation_history)} -> {len(agent_input)} messages")
+        else:
+            agent_input = session.conversation_history.copy()
         
         # Get the appropriate agent based on brand
         current_agent = AGENTS.get(brand, gbp_agent)
@@ -757,6 +774,11 @@ async def chat(chat_msg: ChatMessage):
                 # Remove system notes and internal markers
                 response_text = re.sub(r'\[SYSTEM NOTE:.*?\]', '', response_text, flags=re.IGNORECASE | re.DOTALL)
                 response_text = re.sub(r'\[.*?transfer.*?\]', '', response_text, flags=re.IGNORECASE)
+
+                # Remove source file references like 【13:ppc_white-label-ppc-cost.pdf†source】
+                response_text = re.sub(r'【[^】]*?†source】', '', response_text)
+                response_text = re.sub(r'【\d+:[^】]*】', '', response_text)
+
                 response_text = response_text.strip()
                 
                 # Debug logging
@@ -764,30 +786,58 @@ async def chat(chat_msg: ChatMessage):
                 print(f"   Raw response length: {len(response_text)}")
                 print(f"   Response preview: {response_text[:100]}...")
                 
-                # Extract token usage
+                # Extract token usage - detailed tracking
                 try:
                     token_usage = 0
+                    input_tokens = 0
+                    output_tokens = 0
                     
                     if hasattr(result, 'raw_responses') and result.raw_responses:
                         raw_resp = result.raw_responses[-1]
                         
                         if hasattr(raw_resp, 'usage'):
                             usage_obj = raw_resp.usage
+                            print(f"   Usage object found: {usage_obj}")
                             
+                            # Extract input tokens
+                            if hasattr(usage_obj, 'input_tokens'):
+                                input_tokens = usage_obj.input_tokens
+                            
+                            # Extract output tokens
                             if hasattr(usage_obj, 'output_tokens'):
-                                token_usage = usage_obj.output_tokens
-                            elif hasattr(usage_obj, 'total_tokens'):
+                                output_tokens = usage_obj.output_tokens
+                            
+                            # Extract total tokens
+                            if hasattr(usage_obj, 'total_tokens'):
                                 token_usage = usage_obj.total_tokens
+                            else:
+                                token_usage = input_tokens + output_tokens
                         
                         elif isinstance(raw_resp, dict) and 'usage' in raw_resp:
                             usage_data = raw_resp['usage']
-                            token_usage = usage_data.get('output_tokens') or usage_data.get('total_tokens', 0)
+                            input_tokens = usage_data.get('input_tokens', 0)
+                            output_tokens = usage_data.get('output_tokens', 0)
+                            token_usage = usage_data.get('total_tokens', input_tokens + output_tokens)
                     
-                    print(f"🔢 Token usage for this request: {token_usage}")
+                    print(f"🔢 Token usage for this request:")
+                    print(f"   Input Tokens: {input_tokens}")
+                    print(f"   Output Tokens: {output_tokens}")
+                    print(f"   Total Tokens: {token_usage}")
+                    
+                    # Store in session
+                    session.last_input_tokens = input_tokens
+                    session.last_output_tokens = output_tokens
+                    session.last_token_usage = token_usage
+                    
+                    # Update cumulative totals
+                    session.total_input_tokens += input_tokens
+                    session.total_output_tokens += output_tokens
                     
                 except Exception as token_error:
                     print(f"⚠️ Error extracting tokens: {token_error}")
                     token_usage = 0
+                    input_tokens = 0
+                    output_tokens = 0
                 
                 # If response is too short, try again
                 if len(response_text) < 10 and attempt < max_attempts - 1:
@@ -813,7 +863,6 @@ async def chat(chat_msg: ChatMessage):
                 raise
 
         # Store token usage
-        session.last_token_usage = token_usage
 
         # Fallback if empty - but log this as it shouldn't happen often
         brand_display = BRAND_NAMES.get(brand, brand.upper())
@@ -1013,7 +1062,12 @@ async def get_session(session_id: str):
         "message_count": len(session.conversation_history),
         "created_at": session.created_at.isoformat(),
         "email_sent": session.email_sent,
-        "last_token_usage": session.last_token_usage
+        "last_input_tokens": session.last_input_tokens,
+        "last_output_tokens": session.last_output_tokens,
+        "last_token_usage": session.last_token_usage,
+        "total_input_tokens": session.total_input_tokens,
+        "total_output_tokens": session.total_output_tokens,
+        "total_tokens": session.total_input_tokens + session.total_output_tokens
     })
 
 
