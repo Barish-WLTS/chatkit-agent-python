@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Token Usage Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .header-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 64px;
+        }
+
+        .back-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-link:hover {
+            color: #5568d3;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-info {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #1a1a1a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-logout:hover {
+            background: #333333;
+        }
+
+        /* Navigation */
+        .nav-container {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .nav-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 4px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .nav-menu::-webkit-scrollbar {
+            display: none;
+        }
+
+        .nav-item {
+            padding: 14px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #6b7280;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .nav-item:hover {
+            color: #1a1a1a;
+            background: #f9fafb;
+        }
+
+        .nav-item.active {
+            color: #1a1a1a;
+            border-bottom-color: #1a1a1a;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        .page-header {
+            margin-bottom: 32px;
+        }
+
+        .page-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .stat-card.highlight {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+        }
+
+        .stat-card.highlight .stat-label {
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .stat-card.highlight .stat-value {
+            color: white;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            color: #1a1a1a;
+            letter-spacing: -0.02em;
+        }
+
+        .stat-subtext {
+            font-size: 13px;
+            color: #9ca3af;
+            margin-top: 8px;
+        }
+
+        .stat-card.highlight .stat-subtext {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .section {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 28px;
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            background: #f9fafb;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 14px;
+            color: #374151;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr {
+            transition: background 0.15s ease;
+            cursor: pointer;
+        }
+
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .token-breakdown {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+        }
+
+        .token-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .token-item-label {
+            color: #9ca3af;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .token-item-value {
+            color: #1a1a1a;
+            font-weight: 600;
+            margin-top: 2px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 48px 24px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+        .btn-primary {
+        background-color: transparent;
+        color: #2f2f2f;
+        border: 2px solid #2f2f2f;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.25s ease-in-out;
+        position: relative;
+    }
+
+    .btn-primary:hover {
+        background-color: #2f2f2f;
+        color: #ffffff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(47, 47, 47, 0.15);
+    }
+
+    .btn-primary:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(47, 47, 47, 0.1);
+    }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .page-header h1 {
+                font-size: 22px;
+            }
+
+            .nav-menu {
+                padding-bottom: 4px;
+            }
+
+            .nav-item {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+
+            .container {
+                padding: 24px 16px;
+            }
+
+            .token-breakdown {
+                flex-direction: column;
+                gap: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-container">
+            <div class="header-left">
+                <h1>Multi-Brand Chatbot Analytics</h1>
+            </div>
+            <div class="header-right">
+                <a href="/admin/recipients">
+                    <button class="btn-primary" style="margin-right: 12px;">Recipients</button>
+                </a>
+                <div class="user-info">
+                    Welcome, <strong>{{ username }}</strong>
+                </div>
+                <a href="/admin/logout">
+                    <button class="btn-logout">Logout</button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="nav-container">
+        <div class="nav-wrapper">
+            <nav class="nav-menu">
+                <a class="nav-item" data-section="overview">Overview</a>
+                <a class="nav-item" data-section="sessions">Total Sessions</a>
+                <a class="nav-item" data-section="users">Total Users</a>
+                <a class="nav-item" data-section="messages">Total Messages</a>
+                <a class="nav-item" data-section="emails">Emails Sent</a>
+                <a class="nav-item" data-section="duration">Avg Duration</a>
+                <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="brands">Active Brands</a>
+            </nav>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-header">
+            <h1>Token Usage Analytics</h1>
+            <p class="page-subtitle">Comprehensive token consumption across all sessions and brands</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card highlight">
+                <div class="stat-label">Total Tokens</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_tokens %}
+                        {{ "{:,.0f}".format(overall_stats.total_tokens) }}
+                    {% else %}
+                        0
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">All-time usage</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Input Tokens</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_input_tokens %}
+                        {{ "{:,.0f}".format(overall_stats.total_input_tokens) }}
+                    {% else %}
+                        0
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">User messages</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Output Tokens</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_output_tokens %}
+                        {{ "{:,.0f}".format(overall_stats.total_output_tokens) }}
+                    {% else %}
+                        0
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">AI responses</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Avg per Session</div>
+                <div class="stat-value">
+                    {% if overall_stats.avg_per_session %}
+                        {{ "%.0f"|format(overall_stats.avg_per_session) }}
+                    {% else %}
+                        0
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">Average tokens</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Total Sessions</div>
+                <div class="stat-value">{{ overall_stats.total_sessions or 0 }}</div>
+                <div class="stat-subtext">With token data</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Token Usage by Brand</h2>
+            </div>
+            {% if brand_tokens %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Brand</th>
+                            <th>Sessions</th>
+                            <th>Total Tokens</th>
+                            <th>Input Tokens</th>
+                            <th>Output Tokens</th>
+                            <th>Avg per Session</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for brand in brand_tokens %}
+                        <tr onclick="{% if brand.id %}window.location.href='/admin/brand/{{ brand.id }}'{% endif %}" style="cursor: {% if brand.id %}pointer{% else %}default{% endif %};">
+                            <td><strong>{{ brand.brand_display_name }}</strong></td>
+                            <td>{{ brand.session_count or 0 }}</td>
+                            <td>
+                                <strong>{{ "{:,.0f}".format(brand.total_tokens or 0) }}</strong>
+                                <div class="progress-bar">
+                                    {% set max_tokens = brand_tokens[0].total_tokens if brand_tokens else 1 %}
+                                    {% set percentage = (brand.total_tokens / max_tokens * 100) if brand.total_tokens else 0 %}
+                                    <div class="progress-fill" style="width: {{ percentage }}%;"></div>
+                                </div>
+                            </td>
+                            <td>{{ "{:,.0f}".format(brand.input_tokens or 0) }}</td>
+                            <td>{{ "{:,.0f}".format(brand.output_tokens or 0) }}</td>
+                            <td>{{ "%.0f"|format(brand.avg_tokens or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No brand token data available</div>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Daily Token Usage (Last 30 Days)</h2>
+            </div>
+            {% if daily_tokens %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Sessions</th>
+                            <th>Total Tokens</th>
+                            <th>Input Tokens</th>
+                            <th>Output Tokens</th>
+                            <th>Avg per Session</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for day in daily_tokens %}
+                        <tr>
+                            <td><strong>{{ day.date.strftime('%Y-%m-%d') }}</strong></td>
+                            <td>{{ day.sessions }}</td>
+                            <td><strong>{{ "{:,.0f}".format(day.total_tokens) }}</strong></td>
+                            <td>{{ "{:,.0f}".format(day.input_tokens) }}</td>
+                            <td>{{ "{:,.0f}".format(day.output_tokens) }}</td>
+                            <td>{{ "%.0f"|format(day.avg_tokens) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No daily token data available</div>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Top Sessions by Token Usage</h2>
+            </div>
+            {% if top_sessions %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Brand</th>
+                            <th>User</th>
+                            <th>Total Tokens</th>
+                            <th>Token Breakdown</th>
+                            <th>Messages</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for session in top_sessions %}
+                        <tr>
+                            <td><code>{{ session.session_id[:16] }}...</code></td>
+                            <td><strong>{{ session.brand_display_name }}</strong></td>
+                            <td>
+                                {% if session.user_email %}
+                                    {{ session.user_email }}
+                                {% else %}
+                                    <span style="color: #9ca3af;">Anonymous</span>
+                                {% endif %}
+                            </td>
+                            <td><strong>{{ "{:,.0f}".format(session.total_tokens) }}</strong></td>
+                            <td>
+                                <div class="token-breakdown">
+                                    <div class="token-item">
+                                        <span class="token-item-label">Input</span>
+                                        <span class="token-item-value">{{ "{:,.0f}".format(session.total_input_tokens) }}</span>
+                                    </div>
+                                    <div class="token-item">
+                                        <span class="token-item-label">Output</span>
+                                        <span class="token-item-value">{{ "{:,.0f}".format(session.total_output_tokens) }}</span>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>{{ session.message_count }}</td>
+                            <td style="font-size: 13px; color: #6b7280;">
+                                {{ session.started_at.strftime('%Y-%m-%d') }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No session data available</div>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Top Users by Token Usage</h2>
+            </div>
+            {% if top_users %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Name</th>
+                            <th>Sessions</th>
+                            <th>Total Tokens</th>
+                            <th>Avg per Session</th>
+                        </tr>
+                    </thead>
+                        <tbody>
+                            {% for user in top_users %}
+                            <tr onclick="{% if user.id %}window.location.href='/admin/user/{{ user.id }}'{% endif %}" style="cursor: {% if user.id %}pointer{% else %}default{% endif %};">
+                                <td><strong>{{ user.email }}</strong></td>
+                                <td>{{ user.name or '-' }}</td>
+                                <td>{{ user.session_count }}</td>
+                                <td><strong>{{ "{:,.0f}".format(user.total_tokens or 0) }}</strong></td>
+                                <td>{{ "%.0f"|format(user.avg_tokens or 0) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No user token data available</div>
+            {% endif %}
+        </div>
+    </div>
+
+     <script>
+    // Smart Navigation System
+    (function() {
+        const navItems = document.querySelectorAll('.nav-item');
+        const sections = {
+            'overview': document.getElementById('overview-section'),
+            'sessions': document.getElementById('sessions-section'),
+            'users': document.getElementById('users-section'),
+            'messages': document.getElementById('messages-section'),
+            'emails': document.getElementById('emails-section'),
+            'duration': document.getElementById('duration-section'),
+            'tokens': document.getElementById('tokens-section'),
+            'brands': document.getElementById('brands-section')
+        };
+
+        // Check if we're on the dashboard page (has sections)
+        const isDashboardPage = Object.values(sections).some(section => section !== null);
+        
+        // Get current page path
+        const currentPath = window.location.pathname;
+
+        // Function to show section (only works on dashboard)
+        function showSection(sectionName) {
+            if (!isDashboardPage) return;
+
+            // Hide all sections
+            Object.values(sections).forEach(section => {
+                if (section) section.classList.add('hidden');
+            });
+
+            // Show selected section
+            if (sections[sectionName]) {
+                sections[sectionName].classList.remove('hidden');
+            }
+
+            // Update active nav item
+            navItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.section === sectionName) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Update URL hash without page reload
+            if (sectionName !== 'overview') {
+                window.history.pushState(null, '', '#' + sectionName);
+            } else {
+                window.history.pushState(null, '', window.location.pathname);
+            }
+
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Handle hash-based navigation on page load
+        if (isDashboardPage) {
+            const hash = window.location.hash.substring(1);
+            if (hash && sections[hash]) {
+                // Show the section from hash
+                showSection(hash);
+            } else {
+                // Show overview by default
+                showSection('overview');
+            }
+        }
+
+        // Set active nav item based on current page (for non-dashboard pages)
+        if (!isDashboardPage) {
+            navItems.forEach(item => {
+                const itemHref = item.getAttribute('href');
+                // Mark as active if href matches current path
+                if (itemHref && currentPath === itemHref) {
+                    item.classList.add('active');
+                }
+            });
+        }
+
+        // Add click handlers to nav items
+        navItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                const itemHref = item.getAttribute('href');
+                const itemSection = item.dataset.section;
+
+                // If on dashboard page
+                if (isDashboardPage) {
+                    if (itemSection) {
+                        e.preventDefault();
+                        showSection(itemSection);
+                    }
+                }
+                // If NOT on dashboard page
+                else {
+                    // If item has NO href but has data-section, redirect to dashboard with hash
+                    if (!itemHref && itemSection) {
+                        e.preventDefault();
+                        window.location.href = '/admin/dashboard#' + itemSection;
+                    }
+                    // If item has href, allow normal navigation
+                }
+            });
+        });
+
+        // Add click handlers to stat cards for navigation (only on dashboard)
+        if (isDashboardPage) {
+            const statCards = document.querySelectorAll('.stat-card[data-navigate]');
+            statCards.forEach(card => {
+                card.addEventListener('click', () => {
+                    const section = card.dataset.navigate;
+                    showSection(section);
+                });
+            });
+
+            // Auto-refresh dashboard every 120 seconds (only on dashboard)
+            setTimeout(function() {
+                location.reload();
+            }, 120000);
+        }
+    })();
+</script>
+</body>
+</html>

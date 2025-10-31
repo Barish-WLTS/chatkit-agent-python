@@ -1,23 +1,26 @@
-from __future__ import annotations as _annotations
+from __future__ import annotations
 
 import asyncio
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 import re
 import pytz
-
+import secrets
 import httpx
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request, status, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from fastapi.staticfiles import StaticFiles
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-
+from contextlib import asynccontextmanager
+from decimal import Decimal
+import aiomysql
 from agents import (
     Agent,
     FileSearchTool,
@@ -29,33 +32,20 @@ from agents import (
     TResponseInputItem,
 )
 
+# Import database handler
+from database import db_handler, db_pool
+import logging
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 # ==================== CONFIGURATION ====================
 
-# BREVO_API_KEY = os.getenv("BREVO_API_KEY", "your_brevo_api_key_here")
-# BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
-
-# ==================== SMTP CONFIGURATION ====================
-
 SMTP_HOST = os.getenv("SMTP_HOST", "mail.gbpseo.in")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # SSL port
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "chatbot@gbpseo.in")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "smtp_password")  # Replace with actual password
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "XXXXXXXXXXX")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "chatbot@gbpseo.in")
 SMTP_FROM_NAME = "Chatbot"
-
-# Recipient emails per brand
-RECIPIENT_EMAILS = {
-    "gbpseo": [
-        "barishwlts@gmail.com",
-        "hello@gbpseo.in"
-    ],
-    "whitedigital": [
-        "barishwlts@gmail.com",
-        "info@whitedigital.in",
-        "gunanadar@gmail.com"
-
-    ]
-}
 
 PORT = 3000
 MAX_CONTEXT_MESSAGES = 10
@@ -81,9 +71,12 @@ class UserLocation(BaseModel):
 
 
 class ConversationSession(BaseModel):
-    """Track conversation state"""
+    """Track conversation state (in-memory for performance)"""
     session_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    brand: str = Field(default="gbpseo")  # Track which brand this session is for
+    session_db_id: Optional[int] = None  # DB primary key
+    brand: str = Field(default="gbpseo")
+    brand_id: Optional[int] = None  # DB brand id
+    user_id: Optional[int] = None  # DB user id
     user_context: UserContext = Field(default_factory=UserContext)
     user_location: UserLocation = Field(default_factory=UserLocation)
     conversation_history: List[TResponseInputItem] = Field(default_factory=list)
@@ -103,7 +96,7 @@ class ChatMessage(BaseModel):
     session_id: Optional[str] = None
     user_info: Optional[Dict[str, str]] = None
     user_location: Optional[Dict[str, str]] = None
-    brand: Optional[str] = "gbpseo"  # Default to gbpseo for backward compatibility
+    brand: Optional[str] = "gbpseo"
 
 
 class ChatResponse(BaseModel):
@@ -140,6 +133,7 @@ CRITICAL RESPONSE RULES:
 - Every response must be at least 2-3 sentences with real value
 - If you're not sure, still provide your best answer based on GBP knowledge
 - Use proper markdown formatting in ALL responses
+- NEVER include citation markers like 【】 or †source in your responses
 
 CONTACT INFORMATION HANDLING:
 - If the user provides their contact information (phone number, mobile number) AND requests a callback or asks to connect with the team, acknowledge professionally
@@ -169,7 +163,16 @@ Do not:
 - Make false guarantees (e.g., "#1 ranking in 3 days")
 - Include internal notes like "[Transferring to...]" in your responses
 - Use emojis
-- Return empty or very short responses without substance""",
+- Return empty or very short responses without substance
+- **Mention or reference data sources, files, or documents** (e.g., "According to a GBPSEO FAQ document" or "Based on the provided data")
+
+
+**CITATION AND SOURCE HANDLING:**
+    - NEVER include citation markers like 【】 or †source in your responses
+    - Do NOT mention file names, document references, or data sources
+    - Present information naturally as if it's your own knowledge
+    - Remove any automatic citations before responding
+    """,
     model="gpt-4.1-nano",
     tools=[gbp_file_search],
     model_settings=ModelSettings(
@@ -209,6 +212,7 @@ CRITICAL RESPONSE RULES:
 - Always provide value first before asking for contact details
 - If unsure about something, still offer your best insight based on PPC best practices
 - Always be confident, data-informed, and results-focused
+- NEVER include citation markers like 【】 or †source in your responses
 
 CONTACT INFORMATION HANDLING:
 - If the user provides their contact information (phone number, email) AND requests a callback or asks to connect with the team, acknowledge professionally
@@ -242,6 +246,13 @@ Do Not:
 - Mention or guess pricing unless it's publicly visible
 - Make unverifiable claims such as "#1 ranking guaranteed"
 - Ask for contact information unless the user indicates they want to be contacted
+- **Mention or reference data sources, files, or documents** (e.g., "According to a whiteDigital FAQ document" or "Based on the provided data")
+
+**CITATION AND SOURCE HANDLING:**
+    - NEVER include citation markers like 【】 or †source in your responses
+    - Do NOT mention file names, document references, or data sources
+    - Present information naturally as if it's your own knowledge
+    - Remove any automatic citations before responding
 
 Goal: Help users understand whiteDigital's PPC services, build trust, guide them to book a Free PPC Audit, and provide expert PPC advice.""",
     model="gpt-4.1-nano",
@@ -249,7 +260,7 @@ Goal: Help users understand whiteDigital's PPC services, build trust, guide them
     model_settings=ModelSettings(
         temperature=1,
         top_p=1,
-        max_tokens=609,
+        max_tokens=600,
         store=True
     )
 )
@@ -266,19 +277,60 @@ BRAND_NAMES = {
     "whitedigital": "whiteDigital"
 }
 
-# ==================== SESSION STORAGE ====================
+# ==================== SESSION STORAGE (In-Memory Cache) ====================
 
 active_sessions: Dict[str, ConversationSession] = {}
 
 
-def get_or_create_session(session_id: Optional[str] = None, brand: str = "gbpseo") -> ConversationSession:
-    """Get existing session or create new one"""
+async def get_or_create_session(session_id: Optional[str] = None, brand: str = "gbpseo") -> ConversationSession:
+    """Get existing session or create new one with DB sync"""
+    
+    # Check in-memory cache first
     if session_id and session_id in active_sessions:
         session = active_sessions[session_id]
         session.last_activity = datetime.now()
+        # Update activity in DB (non-blocking)
+        await db_handler.update_session_activity(session_id)
         return session
     
+    # If session_id provided, try to load from DB
+    if session_id:
+        db_session = await db_handler.get_session_by_session_id(session_id)
+        if db_session:
+            # Reconstruct session from DB
+            session = ConversationSession(
+                session_id=session_id,
+                session_db_id=db_session['id'],
+                brand=brand,
+                brand_id=db_session['brand_id'],
+                user_id=db_session['user_id']
+            )
+            # Load messages from DB
+            messages = await db_handler.get_session_messages(db_session['id'])
+            for msg in messages:
+                session.conversation_history.append({
+                    "role": msg['role'],
+                    "content": [{"type": "input_text" if msg['role'] == 'user' else "output_text", "text": msg['content']}]
+                })
+            
+            active_sessions[session_id] = session
+            return session
+    
+    # Create new session
     new_session = ConversationSession(brand=brand)
+    
+    # Get brand from DB
+    brand_data = await db_handler.get_brand_by_key(brand)
+    if brand_data:
+        new_session.brand_id = brand_data['id']
+    
+    # Create session in DB (non-blocking for speed)
+    session_db_id = await db_handler.create_session(
+        new_session.session_id, 
+        new_session.brand_id if new_session.brand_id else 1
+    )
+    new_session.session_db_id = session_db_id
+    
     active_sessions[new_session.session_id] = new_session
     return new_session
 
@@ -372,7 +424,12 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     
     brand = session.brand
     brand_display = BRAND_NAMES.get(brand, brand.upper())
-    recipients_list = RECIPIENT_EMAILS.get(brand, RECIPIENT_EMAILS["gbpseo"])
+    
+    # Get recipients from DB
+    if session.brand_id:
+        recipients_list = await db_handler.get_brand_recipients(session.brand_id)
+    else:
+        recipients_list = ["barishwlts@gmail.com"]
     
     print(f"📧 Preparing email for {brand_display} session {session.session_id}")
     print(f"   Total conversation items: {len(session.conversation_history)}")
@@ -577,44 +634,45 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     
     for attempt in range(max_retries):
         try:
-            # Create message
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = f"{brand_display} {SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
             msg['To'] = ", ".join(recipients_list)
             
-            # Attach HTML content
             html_part = MIMEText(html_content, 'html')
             msg.attach(html_part)
             
-            # Connect to SMTP server using SSL (port 465)
             print(f"📤 Connecting to SMTP server: {SMTP_HOST}:{SMTP_PORT}")
             
-            # Use SMTP_SSL for port 465
             server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15)
             
-            # Enable debug output (optional - comment out in production)
-            # server.set_debuglevel(1)
-            
-            # Login with full email address as username
             print(f"🔐 Logging in as: {SMTP_USERNAME}")
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             
-            # Send email
             print(f"📬 Sending email to: {', '.join(recipients_list)}")
             server.send_message(msg)
             server.quit()
             
             session.email_sent = True
+            
+            # Log email in DB (non-blocking)
+            if session.session_db_id and session.brand_id:
+                await db_handler.log_email_send(
+                    session.session_db_id,
+                    session.user_id,
+                    session.brand_id,
+                    recipients_list,
+                    subject,
+                    html_content,
+                    "sent"
+                )
+            
             print(f"✅ Email sent successfully for {brand_display} session {session.session_id} (attempt {attempt + 1})")
             return True
         
         except smtplib.SMTPAuthenticationError as e:
             print(f"❌ SMTP Authentication failed: {e}")
-            print(f"   Username: {SMTP_USERNAME}")
-            print(f"   Server: {SMTP_HOST}:{SMTP_PORT}")
-            print(f"   Please verify your email credentials")
-            break  # Don't retry auth errors
+            break
         
         except smtplib.SMTPException as e:
             print(f"⚠️ SMTP error for session {session.session_id} (attempt {attempt + 1}/{max_retries}): {e}")
@@ -625,7 +683,6 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         
         except Exception as e:
             print(f"❌ Unexpected error sending email for session {session.session_id}: {e}")
-            print(f"   Error type: {type(e).__name__}")
             import traceback
             traceback.print_exc()
             if attempt < max_retries - 1:
@@ -635,13 +692,56 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     
     return False
 
+def create_session_token():
+    """Generate secure session token"""
+    return secrets.token_urlsafe(32)
+
+def verify_session(request: Request):
+    """Verify user session from cookie"""
+    session_token = request.cookies.get("dashboard_session")
+    if not session_token or session_token not in ACTIVE_SESSIONS:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    session_data = ACTIVE_SESSIONS[session_token]
+    if datetime.now() > session_data["expires"]:
+        del ACTIVE_SESSIONS[session_token]
+        raise HTTPException(status_code=401, detail="Session expired")
+    
+    return session_data
+# ==================== FASTAPI APP LIFECYCLE ====================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage app lifecycle - startup and shutdown"""
+    # Startup
+    print("🚀 Starting Multi-Brand Chatbot System...")
+    await db_pool.create_pool()
+    print("✅ Database connection established")
+    
+    yield
+    
+    # Shutdown
+    print("🛑 Shutting down...")
+    await db_pool.close_pool()
+    print("✅ Database connections closed")
+
 
 # ==================== FASTAPI APP ====================
+ACTIVE_SESSIONS = {}
+SESSION_TIMEOUT = timedelta(hours=24)
 
-app = FastAPI(title="Multi-Brand Chatbot System", version="2.0.0")
+app = FastAPI(
+    title="Multi-Brand Chatbot System", 
+    version="3.0.0",
+    lifespan=lifespan
+)
+
+templates = Jinja2Templates(directory="templates")
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 os.makedirs("imgs", exist_ok=True)
-
-# Mount the imgs folder
 app.mount("/imgs", StaticFiles(directory="imgs"), name="imgs")
 
 app.add_middleware(
@@ -672,6 +772,7 @@ async def health_check():
     return JSONResponse({
         "status": "healthy",
         "active_sessions": len(active_sessions),
+        "database": "connected" if db_pool.pool else "disconnected",
         "timestamp": datetime.now().isoformat()
     })
 
@@ -685,14 +786,34 @@ async def chat(chat_msg: ChatMessage):
         brand = chat_msg.brand or "gbpseo"
         
         # Get or create session with brand
-        session = get_or_create_session(chat_msg.session_id, brand)
+        session = await get_or_create_session(chat_msg.session_id, brand)
         
         # Store user info from frontend
         if chat_msg.user_info:
             if chat_msg.user_info.get('name'):
                 session.user_context.name = chat_msg.user_info['name']
             if chat_msg.user_info.get('email'):
-                session.user_context.email = chat_msg.user_info['email']
+                email = chat_msg.user_info['email']
+                session.user_context.email = email
+                
+                # Create or update user in DB (non-blocking)
+                if validate_email(email):
+                    user_data = {
+                        'name': session.user_context.name,
+                        'email': email,
+                        'phone': session.user_context.phone,
+                        'ip_address': session.user_location.ip,
+                        'city': session.user_location.city,
+                        'region': session.user_location.region,
+                        'country': session.user_location.country
+                    }
+                    user_id = await db_handler.get_or_create_user(email, user_data)
+                    session.user_id = user_id
+                    
+                    # Update session with user_id in DB
+                    if session.session_db_id:
+                        asyncio.create_task(db_handler._update_session_user_task(session.session_db_id, user_id))
+            
             if chat_msg.user_info.get('phone'):
                 session.user_context.phone = chat_msg.user_info['phone']
         
@@ -715,7 +836,6 @@ async def chat(chat_msg: ChatMessage):
         
         # Prepare input with limited conversation history to reduce tokens
         if len(session.conversation_history) > MAX_CONTEXT_MESSAGES:
-            # Keep the most recent messages
             agent_input = session.conversation_history[-MAX_CONTEXT_MESSAGES:]
             print(f"📊 Limited conversation history: {len(session.conversation_history)} -> {len(agent_input)} messages")
         else:
@@ -728,6 +848,8 @@ async def chat(chat_msg: ChatMessage):
         max_attempts = 2
         response_text = ""
         token_usage = 0
+        input_tokens = 0
+        output_tokens = 0
 
         for attempt in range(max_attempts):
             try:
@@ -743,22 +865,19 @@ async def chat(chat_msg: ChatMessage):
                     )
                 )
                 
-                # IMPROVED: Extract response text with multiple fallback methods
+                # Extract response text with multiple fallback methods
                 response_text = ""
                 
                 for item in result.new_items:
                     if isinstance(item, MessageOutputItem):
-                        # Method 1: Try the helper function
                         text = ItemHelpers.text_message_output(item)
                         if text:
                             response_text += text + " "
                         else:
-                            # Method 2: Try direct content extraction
                             if hasattr(item, 'content') and item.content:
                                 if isinstance(item.content, list):
                                     for content_item in item.content:
                                         if isinstance(content_item, dict):
-                                            # Check for text in various formats
                                             if 'text' in content_item:
                                                 response_text += content_item['text'] + " "
                                             elif 'output_text' in content_item:
@@ -768,25 +887,18 @@ async def chat(chat_msg: ChatMessage):
                                 elif isinstance(item.content, str):
                                     response_text += item.content + " "
                 
-                # Clean up the response
                 response_text = response_text.strip()
-                
-                # Remove system notes and internal markers
                 response_text = re.sub(r'\[SYSTEM NOTE:.*?\]', '', response_text, flags=re.IGNORECASE | re.DOTALL)
                 response_text = re.sub(r'\[.*?transfer.*?\]', '', response_text, flags=re.IGNORECASE)
-
-                # Remove source file references like 【13:ppc_white-label-ppc-cost.pdf†source】
                 response_text = re.sub(r'【[^】]*?†source】', '', response_text)
                 response_text = re.sub(r'【\d+:[^】]*】', '', response_text)
-
                 response_text = response_text.strip()
                 
-                # Debug logging
                 print(f"🔍 Response extraction (attempt {attempt + 1}):")
                 print(f"   Raw response length: {len(response_text)}")
                 print(f"   Response preview: {response_text[:100]}...")
                 
-                # Extract token usage - detailed tracking
+                # Extract token usage
                 try:
                     token_usage = 0
                     input_tokens = 0
@@ -797,17 +909,13 @@ async def chat(chat_msg: ChatMessage):
                         
                         if hasattr(raw_resp, 'usage'):
                             usage_obj = raw_resp.usage
-                            print(f"   Usage object found: {usage_obj}")
                             
-                            # Extract input tokens
                             if hasattr(usage_obj, 'input_tokens'):
                                 input_tokens = usage_obj.input_tokens
                             
-                            # Extract output tokens
                             if hasattr(usage_obj, 'output_tokens'):
                                 output_tokens = usage_obj.output_tokens
                             
-                            # Extract total tokens
                             if hasattr(usage_obj, 'total_tokens'):
                                 token_usage = usage_obj.total_tokens
                             else:
@@ -833,24 +941,59 @@ async def chat(chat_msg: ChatMessage):
                     session.total_input_tokens += input_tokens
                     session.total_output_tokens += output_tokens
                     
+                    # Update tokens in DB (non-blocking)
+                    await db_handler.update_session_tokens(
+                        session.session_id,
+                        input_tokens,
+                        output_tokens,
+                        token_usage
+                    )
+                    
                 except Exception as token_error:
                     print(f"⚠️ Error extracting tokens: {token_error}")
                     token_usage = 0
                     input_tokens = 0
                     output_tokens = 0
                 
-                # If response is too short, try again
                 if len(response_text) < 10 and attempt < max_attempts - 1:
                     print(f"⚠️ Short response detected, retrying...")
                     await asyncio.sleep(0.5)
                     continue
                 
-                # IMPORTANT: Add to conversation history BEFORE any modifications
+                # Add to conversation history
                 session.conversation_history.extend([
                     item.to_input_item() for item in result.new_items
                 ])
                 
-                # Success - exit retry loop
+                # FIXED: Save user message with input tokens AFTER we have token counts
+                if session.session_db_id:
+                    # Save user message with input tokens
+                    await db_handler.add_message(
+                        session.session_db_id,
+                        "user",
+                        chat_msg.message,
+                        None,
+                        "text",
+                        None,
+                        None,
+                        input_tokens,  # User message gets input tokens
+                        0              # User message has 0 output tokens
+                    )
+                    
+                    # Save assistant message with output tokens
+                    formatted_response = format_markdown_to_html(response_text)
+                    await db_handler.add_message(
+                        session.session_db_id,
+                        "assistant",
+                        response_text,
+                        formatted_response,
+                        "text",
+                        None,
+                        None,
+                        0,              # Assistant message has 0 input tokens
+                        output_tokens   # ✅ Assistant message gets output tokens
+                    )
+                
                 break
                 
             except Exception as e:
@@ -862,13 +1005,10 @@ async def chat(chat_msg: ChatMessage):
                     continue
                 raise
 
-        # Store token usage
-
-        # Fallback if empty - but log this as it shouldn't happen often
+        # Fallback if empty
         brand_display = BRAND_NAMES.get(brand, brand.upper())
         if not response_text or len(response_text) < 10:
             print(f"⚠️ WARNING: Using fallback response for session {session.session_id}")
-            print(f"   User message was: {chat_msg.message}")
             
             if brand == "whitedigital":
                 response_text = f"Thank you for your message. I'm here to help you with PPC advertising and digital marketing services from {brand_display}. Could you please rephrase your question or let me know what specific information you're looking for about our services?"
@@ -891,7 +1031,7 @@ async def chat(chat_msg: ChatMessage):
         traceback.print_exc()
         
         brand = chat_msg.brand or "gbpseo"
-        session = get_or_create_session(chat_msg.session_id, brand)
+        session = await get_or_create_session(chat_msg.session_id, brand)
         brand_display = BRAND_NAMES.get(brand, brand.upper())
         
         if brand == "whitedigital":
@@ -906,6 +1046,7 @@ async def chat(chat_msg: ChatMessage):
             formatted_response=format_markdown_to_html(fallback_response)
         )
 
+
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...), 
@@ -917,7 +1058,7 @@ async def upload_file(
     """Handle file uploads with user info"""
     import json
     
-    session = get_or_create_session(session_id, brand)
+    session = await get_or_create_session(session_id, brand)
     
     # Update user info if provided
     if user_info:
@@ -950,6 +1091,18 @@ async def upload_file(
         "content": [{"type": "input_text", "text": f"[User uploaded file: {file.filename}]"}]
     }
     session.conversation_history.append(file_message)
+    
+    # Save file upload to DB (non-blocking)
+    if session.session_db_id:
+        await db_handler.add_message(
+            session.session_db_id,
+            "user",
+            f"[User uploaded file: {file.filename}]",
+            None,
+            "file",
+            file.filename,
+            len(file_content)
+        )
     
     return JSONResponse({
         "status": "success",
@@ -1008,6 +1161,10 @@ async def end_session(request: Request):
         # Check if we have enough messages
         if len(session.conversation_history) < 3:
             print(f"ℹ️ Session {session_id} has insufficient messages ({len(session.conversation_history)})")
+            
+            # Mark session as ended in DB
+            await db_handler.end_session(session.session_id, False)
+            
             del active_sessions[session_id]
             return JSONResponse({
                 "status": "success",
@@ -1019,11 +1176,30 @@ async def end_session(request: Request):
         print(f"📧 Attempting to send email for session {session_id}...")
         email_sent = await send_conversation_email(session)
         
+        # Mark session as ended in DB
+        await db_handler.end_session(session.session_id, email_sent)
+        
+        # Update user-brand interaction stats
+        if session.user_id and session.brand_id:
+            await db_handler.update_user_brand_interaction(
+                session.user_id,
+                session.brand_id,
+                len(session.conversation_history),
+                email_sent,
+                session.total_input_tokens,
+                session.total_output_tokens
+            )
+        
+        # Update daily analytics
+        if session.brand_id:
+            await db_handler.update_daily_analytics(session.brand_id)
+        
         if email_sent:
             print(f"✅ Email sent successfully for session {session_id}")
-            del active_sessions[session_id]
         else:
             print(f"❌ Failed to send email for session {session_id}")
+        
+        del active_sessions[session_id]
         
         return JSONResponse({
             "status": "success",
@@ -1050,7 +1226,26 @@ async def get_session(session_id: str):
     """Get session details"""
     
     if session_id not in active_sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Try to load from DB
+        db_session = await db_handler.get_session_by_session_id(session_id)
+        if not db_session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return JSONResponse({
+            "session_id": db_session['session_id'],
+            "brand_id": db_session['brand_id'],
+            "user_id": db_session['user_id'],
+            "status": db_session['status'],
+            "message_count": db_session['message_count'],
+            "created_at": db_session['started_at'].isoformat(),
+            "email_sent": db_session['email_sent'],
+            "last_input_tokens": db_session['last_input_tokens'],
+            "last_output_tokens": db_session['last_output_tokens'],
+            "last_token_usage": db_session['last_token_usage'],
+            "total_input_tokens": db_session['total_input_tokens'],
+            "total_output_tokens": db_session['total_output_tokens'],
+            "total_tokens": db_session['total_tokens']
+        })
     
     session = active_sessions[session_id]
     
@@ -1071,6 +1266,1168 @@ async def get_session(session_id: str):
     })
 
 
+# ==================== DASHBOARD API ROUTES ====================
+
+def convert_decimal(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimal(i) for i in obj]
+    return obj
+
+def verify_session(request: Request):
+    """Verify user session from cookie - Redirect to login if unauthorized"""
+    session_token = request.cookies.get("dashboard_session")
+    
+    # If no session token or invalid, redirect to login
+    if not session_token or session_token not in ACTIVE_SESSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail="Unauthorized",
+            headers={"Location": "/admin/login"}
+        )
+    
+    session_data = ACTIVE_SESSIONS[session_token]
+    
+    # Check if session expired
+    if datetime.now() > session_data["expires"]:
+        del ACTIVE_SESSIONS[session_token]
+        raise HTTPException(
+            status_code=status.HTTP_303_SEE_OTHER,
+            detail="Session expired",
+            headers={"Location": "/admin/login"}
+        )
+    
+    return session_data
+
+
+def check_already_logged_in(request: Request):
+    """Check if user is already logged in - Redirect to dashboard if yes"""
+    session_token = request.cookies.get("dashboard_session")
+    
+    if session_token and session_token in ACTIVE_SESSIONS:
+        session_data = ACTIVE_SESSIONS[session_token]
+        
+        # Check if session is still valid
+        if datetime.now() <= session_data["expires"]:
+            return True  # User is already logged in
+    
+    return False  # User not logged in
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTPException with proper redirects"""
+    
+    # If it's a 303 redirect (from verify_session), do the redirect
+    if exc.status_code == status.HTTP_303_SEE_OTHER:
+        location = exc.headers.get("Location", "/admin/login")
+        return RedirectResponse(url=location, status_code=303)
+    
+    # For other HTTP exceptions, return JSON
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats(brand_key: Optional[str] = None):
+    """Get overall dashboard statistics"""
+    brand_id = None
+    if brand_key:
+        brand_data = await db_handler.get_brand_by_key(brand_key)
+        if brand_data:
+            brand_id = brand_data['id']
+    
+    stats = await db_handler.get_dashboard_stats(brand_id)
+    stats = convert_decimal(stats)
+    return JSONResponse(stats)
+
+@app.get("/admin/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Render login page - Redirect to dashboard if already logged in"""
+    
+    # Check if user is already logged in
+    if check_already_logged_in(request):
+        return RedirectResponse(url="/admin/dashboard", status_code=303)
+    
+    return templates.TemplateResponse("login.html", {"request": request})
+
+@app.post("/admin/login")
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...)
+):
+    """Handle login submission"""
+    # Get credentials from environment
+    admin_username = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin@chatbot")
+    if username == admin_username and password == admin_password:
+        # Create session
+        session_token = create_session_token()
+        ACTIVE_SESSIONS[session_token] = {
+            "username": username,
+            "created": datetime.now(),
+            "expires": datetime.now() + SESSION_TIMEOUT
+        }
+        
+        # Redirect to dashboard
+        response = RedirectResponse(url="/admin/dashboard", status_code=303)
+        response.set_cookie(
+            key="dashboard_session",
+            value=session_token,
+            httponly=True,
+            max_age=int(SESSION_TIMEOUT.total_seconds())
+        )
+        return response
+    else:
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid username or password"}
+        )
+
+@app.get("/admin/logout")
+async def logout(request: Request):
+    """Logout and clear session"""
+    session_token = request.cookies.get("dashboard_session")
+    if session_token and session_token in ACTIVE_SESSIONS:
+        del ACTIVE_SESSIONS[session_token]
+    
+    response = RedirectResponse(url="/admin/login", status_code=303)
+    response.delete_cookie("dashboard_session")
+    return response
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request, session: dict = Depends(verify_session)):
+    """Render main dashboard"""
+    try:
+        # Get all brands
+        brands_query = """
+            SELECT id, brand_key, brand_display_name, is_active,
+                   (SELECT COUNT(*) FROM sessions WHERE brand_id = brands.id) as total_sessions,
+                   (SELECT COUNT(DISTINCT user_id) FROM sessions WHERE brand_id = brands.id) as total_users
+            FROM brands
+            ORDER BY brand_display_name
+        """
+        
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get brands
+                await cursor.execute(brands_query)
+                brands = await cursor.fetchall()
+                
+                # Get overall stats
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.user_id) as total_users,
+                        SUM(s.message_count) as total_messages,
+                        SUM(s.email_sent) as total_emails,
+                        AVG(s.duration_seconds) as avg_duration,
+                        SUM(s.total_tokens) as total_tokens,
+                        COUNT(DISTINCT DATE(s.started_at)) as active_days
+                    FROM sessions s
+                """)
+                overall_stats = await cursor.fetchone()
+                
+                # Get today's stats
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(DISTINCT id) as sessions_today,
+                        COUNT(DISTINCT user_id) as users_today,
+                        SUM(message_count) as messages_today,
+                        SUM(email_sent) as emails_today
+                    FROM sessions
+                    WHERE DATE(started_at) = CURDATE()
+                """)
+                today_stats = await cursor.fetchone()
+                
+                # Get recent sessions
+                await cursor.execute("""
+                    SELECT 
+                        s.session_id,
+                        s.started_at,
+                        s.message_count,
+                        s.status,
+                        s.email_sent,
+                        s.total_tokens,
+                        b.brand_display_name,
+                        u.email as user_email,
+                        u.name as user_name
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    LEFT JOIN users u ON s.user_id = u.id
+                    ORDER BY s.started_at DESC
+                    LIMIT 20
+                """)
+                recent_sessions = await cursor.fetchall()
+                
+                # Get top users
+                await cursor.execute("""
+                    SELECT
+                        u.id, 
+                        u.email,
+                        u.name,
+                        u.total_conversations,
+                        u.last_seen,
+                        COUNT(DISTINCT s.id) as session_count,
+                        SUM(s.message_count) as total_messages
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    GROUP BY u.id
+                    ORDER BY u.total_conversations DESC
+                    LIMIT 10
+                """)
+                top_users = await cursor.fetchall()
+                # Get all users
+                await cursor.execute("""
+                    SELECT
+                        u.id, 
+                        u.email,
+                        u.name,
+                        u.total_conversations,
+                        u.last_seen,
+                        COUNT(DISTINCT s.id) as session_count,
+                        SUM(s.message_count) as total_messages
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    GROUP BY u.id
+                    ORDER BY u.total_conversations DESC
+                """)
+                all_users = await cursor.fetchall()
+
+                # Get daily stats for last 7 days
+                await cursor.execute("""
+                    SELECT 
+                        DATE(started_at) as date,
+                        COUNT(DISTINCT id) as sessions,
+                        COUNT(DISTINCT user_id) as users,
+                        SUM(message_count) as messages,
+                        SUM(email_sent) as emails
+                    FROM sessions
+                    WHERE started_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+                    GROUP BY DATE(started_at)
+                    ORDER BY date DESC
+                """)
+                daily_stats = await cursor.fetchall()
+        
+        return templates.TemplateResponse("dashboard.html", {
+            "request": request,
+            "username": session["username"],
+            "brands": brands,
+            "overall_stats": overall_stats,
+            "today_stats": today_stats,
+            "recent_sessions": recent_sessions,
+            "top_users": top_users,
+            "daily_stats": daily_stats,
+            "all_users" : all_users
+        })
+    
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        return templates.TemplateResponse(
+            "dashboard.html",
+            {"request": request, "error": str(e)}
+        )
+
+@app.get("/admin/api/brand-stats/{brand_id}")
+async def get_brand_stats(brand_id: int, session: dict = Depends(verify_session)):
+    """Get detailed stats for specific brand"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(DISTINCT id) as total_sessions,
+                        COUNT(DISTINCT user_id) as total_users,
+                        SUM(message_count) as total_messages,
+                        SUM(email_sent) as total_emails,
+                        AVG(duration_seconds) as avg_duration,
+                        SUM(total_tokens) as total_tokens
+                    FROM sessions
+                    WHERE brand_id = %s
+                """, (brand_id,))
+                
+                return await cursor.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/api/session-details/{session_id}")
+async def get_session_details(session_id: str, session: dict = Depends(verify_session)):
+    """Get detailed conversation for a session"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get session info
+                await cursor.execute("""
+                    SELECT s.*, b.brand_display_name, u.email, u.name
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    LEFT JOIN users u ON s.user_id = u.id
+                    WHERE s.session_id = %s
+                """, (session_id,))
+                session_info = await cursor.fetchone()
+                
+                # Get messages
+                await cursor.execute("""
+                    SELECT role, content, created_at, input_tokens, output_tokens
+                    FROM messages
+                    WHERE session_id = (SELECT id FROM sessions WHERE session_id = %s)
+                    ORDER BY message_order ASC
+                """, (session_id,))
+                messages = await cursor.fetchall()
+                
+                return {
+                    "session": session_info,
+                    "messages": messages
+                }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/admin/brand/{brand_id}", response_class=HTMLResponse)
+async def brand_detail_page(request: Request, brand_id: int, session: dict = Depends(verify_session)):
+    """Detailed brand analytics page"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get brand info
+                await cursor.execute("""
+                    SELECT b.*,
+                           COUNT(DISTINCT s.id) as total_sessions,
+                           COUNT(DISTINCT s.user_id) as total_users,
+                           SUM(s.message_count) as total_messages,
+                           SUM(s.email_sent) as emails_sent,
+                           SUM(s.total_tokens) as total_tokens,
+                           SUM(s.total_input_tokens) as total_input_tokens,
+                           SUM(s.total_output_tokens) as total_output_tokens,
+                           AVG(s.duration_seconds) as avg_duration
+                    FROM brands b
+                    LEFT JOIN sessions s ON b.id = s.brand_id
+                    WHERE b.id = %s
+                    GROUP BY b.id
+                """, (brand_id,))
+                brand = await cursor.fetchone()
+                
+                if not brand:
+                    raise HTTPException(status_code=404, detail="Brand not found")
+                
+                # Get brand users
+                await cursor.execute("""
+                    SELECT u.*,
+                           COUNT(DISTINCT s.id) as session_count,
+                           SUM(s.message_count) as total_messages,
+                           SUM(s.total_tokens) as total_tokens,
+                           SUM(s.email_sent) as emails_received,
+                           MAX(s.last_activity) as last_activity
+                    FROM users u
+                    INNER JOIN sessions s ON u.id = s.user_id
+                    WHERE s.brand_id = %s
+                    GROUP BY u.id
+                    ORDER BY last_activity DESC
+                    LIMIT 50
+                """, (brand_id,))
+                users = await cursor.fetchall()
+                
+                # Get recent sessions
+                await cursor.execute("""
+                    SELECT s.*,
+                           u.email as user_email,
+                           u.name as user_name
+                    FROM sessions s
+                    LEFT JOIN users u ON s.user_id = u.id
+                    WHERE s.brand_id = %s
+                    ORDER BY s.started_at DESC
+                    LIMIT 20
+                """, (brand_id,))
+                recent_sessions = await cursor.fetchall()
+                
+                # Get daily stats (last 30 days)
+                await cursor.execute("""
+                    SELECT DATE(started_at) as date,
+                           COUNT(DISTINCT id) as sessions,
+                           COUNT(DISTINCT user_id) as users,
+                           SUM(message_count) as messages,
+                           SUM(email_sent) as emails,
+                           SUM(total_tokens) as tokens
+                    FROM sessions
+                    WHERE brand_id = %s
+                    AND started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY DATE(started_at)
+                    ORDER BY date DESC
+                """, (brand_id,))
+                daily_stats = await cursor.fetchall()
+                
+                # Get top users by activity
+                await cursor.execute("""
+                    SELECT u.email, u.name,
+                           COUNT(DISTINCT s.id) as session_count,
+                           SUM(s.message_count) as message_count,
+                           SUM(s.total_tokens) as token_count
+                    FROM users u
+                    INNER JOIN sessions s ON u.id = s.user_id
+                    WHERE s.brand_id = %s
+                    GROUP BY u.id
+                    ORDER BY session_count DESC
+                    LIMIT 10
+                """, (brand_id,))
+                top_users = await cursor.fetchall()
+                
+                # Get email recipients
+                await cursor.execute("""
+                    SELECT * FROM brand_recipients
+                    WHERE brand_id = %s
+                    ORDER BY is_active DESC, email ASC
+                """, (brand_id,))
+                recipients = await cursor.fetchall()
+        
+        return templates.TemplateResponse("brand_detail.html", {
+            "request": request,
+            "username": session["username"],
+            "brand": brand,
+            "users": users,
+            "recent_sessions": recent_sessions,
+            "daily_stats": daily_stats,
+            "top_users": top_users,
+            "recipients": recipients
+        })
+    
+    except Exception as e:
+        logger.error(f"Brand detail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== USER DETAIL PAGE ====================
+
+@app.get("/admin/user/{user_id}", response_class=HTMLResponse)
+async def user_detail_page(request: Request, user_id: int, session: dict = Depends(verify_session)):
+    """Detailed user analytics page"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get user info
+                await cursor.execute("""
+                    SELECT u.*,
+                           COUNT(DISTINCT s.id) as total_sessions,
+                           SUM(s.message_count) as total_messages,
+                           SUM(s.total_tokens) as total_tokens,
+                           SUM(s.total_input_tokens) as total_input_tokens,
+                           SUM(s.total_output_tokens) as total_output_tokens,
+                           SUM(s.email_sent) as emails_received,
+                           AVG(s.duration_seconds) as avg_session_duration
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    WHERE u.id = %s
+                    GROUP BY u.id
+                """, (user_id,))
+                user = await cursor.fetchone()
+                
+                if not user:
+                    raise HTTPException(status_code=404, detail="User not found")
+                
+                # Get user sessions
+                await cursor.execute("""
+                    SELECT s.*,
+                           b.brand_display_name,
+                           b.brand_key
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    WHERE s.user_id = %s
+                    ORDER BY s.started_at DESC
+                    LIMIT 50
+                """, (user_id,))
+                sessions = await cursor.fetchall()
+                
+                # Get emails sent to user
+                await cursor.execute("""
+                    SELECT e.*,
+                           b.brand_display_name,
+                           s.session_id
+                    FROM email_logs e
+                    LEFT JOIN brands b ON e.brand_id = b.id
+                    LEFT JOIN sessions s ON e.session_id = s.id
+                    WHERE e.user_id = %s
+                    ORDER BY e.sent_at DESC
+                    LIMIT 20
+                """, (user_id,))
+                emails = await cursor.fetchall()
+                
+                # Get brand interactions
+                await cursor.execute("""
+                    SELECT ubi.*,
+                           b.brand_display_name,
+                           b.brand_key
+                    FROM user_brand_interactions ubi
+                    LEFT JOIN brands b ON ubi.brand_id = b.id
+                    WHERE ubi.user_id = %s
+                    ORDER BY ubi.last_interaction DESC
+                """, (user_id,))
+                brand_interactions = await cursor.fetchall()
+                
+                # Get activity timeline (last 30 days)
+                await cursor.execute("""
+                    SELECT DATE(started_at) as date,
+                           COUNT(*) as session_count,
+                           SUM(message_count) as message_count,
+                           SUM(total_tokens) as token_count
+                    FROM sessions
+                    WHERE user_id = %s
+                    AND started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY DATE(started_at)
+                    ORDER BY date DESC
+                """, (user_id,))
+                activity_timeline = await cursor.fetchall()
+        
+        return templates.TemplateResponse("user_detail.html", {
+            "request": request,
+            "username": session["username"],
+            "user": user,
+            "sessions": sessions,
+            "emails": emails,
+            "brand_interactions": brand_interactions,
+            "activity_timeline": activity_timeline
+        })
+    
+    except Exception as e:
+        logger.error(f"User detail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== EMAIL LOGS PAGE ====================
+
+@app.get("/admin/emails", response_class=HTMLResponse)
+async def emails_page(request: Request, session: dict = Depends(verify_session)):
+    """Email logs listing page"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get all emails
+                await cursor.execute("""
+                    SELECT e.*,
+                           b.brand_display_name,
+                           u.email as user_email,
+                           u.name as user_name,
+                           s.session_id
+                    FROM email_logs e
+                    LEFT JOIN brands b ON e.brand_id = b.id
+                    LEFT JOIN users u ON e.user_id = u.id
+                    LEFT JOIN sessions s ON e.session_id = s.id
+                    ORDER BY e.sent_at DESC
+                    LIMIT 100
+                """)
+                emails = await cursor.fetchall()
+                
+                # Get email stats
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_emails,
+                        SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent_count,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                        COUNT(DISTINCT brand_id) as brands_count,
+                        COUNT(DISTINCT user_id) as users_count
+                    FROM email_logs
+                """)
+                stats = await cursor.fetchone()
+        
+        return templates.TemplateResponse("emails_list.html", {
+            "request": request,
+            "username": session["username"],
+            "emails": emails,
+            "stats": stats
+        })
+    
+    except Exception as e:
+        logger.error(f"Emails page error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== EMAIL DETAIL PAGE ====================
+
+@app.get("/admin/email/{email_id}", response_class=HTMLResponse)
+async def email_detail_page(request: Request, email_id: int, session: dict = Depends(verify_session)):
+    """View full email content"""
+    print("Session data:", session)
+
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT e.*,
+                           b.brand_display_name,
+                           u.email as user_email,
+                           u.name as user_name,
+                           s.session_id as session_uuid
+                    FROM email_logs e
+                    LEFT JOIN brands b ON e.brand_id = b.id
+                    LEFT JOIN users u ON e.user_id = u.id
+                    LEFT JOIN sessions s ON e.session_id = s.id
+                    WHERE e.id = %s
+                """, (email_id,))
+                email = await cursor.fetchone()
+                if not email:
+                    raise HTTPException(status_code=404, detail="Email not found")
+        
+        return templates.TemplateResponse("email_detail.html", {
+            "request": request,
+            "username": session["username"],
+            "email": email
+        })
+    
+    except Exception as e:
+        logger.error(f"Email detail error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== TOKEN USAGE PAGE ====================
+
+@app.get("/admin/tokens", response_class=HTMLResponse)
+async def tokens_page(request: Request, session: dict = Depends(verify_session)):
+    """Detailed token usage analytics"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Overall token stats
+                await cursor.execute("""
+                    SELECT 
+                        SUM(total_tokens) as total_tokens,
+                        SUM(total_input_tokens) as total_input_tokens,
+                        SUM(total_output_tokens) as total_output_tokens,
+                        COUNT(*) as total_sessions,
+                        AVG(total_tokens) as avg_per_session
+                    FROM sessions
+                """)
+                overall_stats = await cursor.fetchone()
+                
+                # Token usage by brand - ADD b.id here
+                await cursor.execute("""
+                    SELECT b.id,
+                           b.brand_display_name,
+                           b.brand_key,
+                           COUNT(s.id) as session_count,
+                           SUM(s.total_tokens) as total_tokens,
+                           SUM(s.total_input_tokens) as input_tokens,
+                           SUM(s.total_output_tokens) as output_tokens,
+                           AVG(s.total_tokens) as avg_tokens
+                    FROM brands b
+                    LEFT JOIN sessions s ON b.id = s.brand_id
+                    GROUP BY b.id
+                    ORDER BY total_tokens DESC
+                """)
+                brand_tokens = await cursor.fetchall()
+                
+                # Daily token usage (last 30 days)
+                await cursor.execute("""
+                    SELECT DATE(started_at) as date,
+                           COUNT(*) as sessions,
+                           SUM(total_tokens) as total_tokens,
+                           SUM(total_input_tokens) as input_tokens,
+                           SUM(total_output_tokens) as output_tokens,
+                           AVG(total_tokens) as avg_tokens
+                    FROM sessions
+                    WHERE started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    GROUP BY DATE(started_at)
+                    ORDER BY date DESC
+                """)
+                daily_tokens = await cursor.fetchall()
+                
+                # Top sessions by token usage
+                await cursor.execute("""
+                    SELECT s.session_id,
+                           s.started_at,
+                           s.total_tokens,
+                           s.total_input_tokens,
+                           s.total_output_tokens,
+                           s.message_count,
+                           b.brand_display_name,
+                           u.email as user_email
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    LEFT JOIN users u ON s.user_id = u.id
+                    ORDER BY s.total_tokens DESC
+                    LIMIT 50
+                """)
+                top_sessions = await cursor.fetchall()
+                
+                # Top users by token usage - ADD u.id here
+                await cursor.execute("""
+                    SELECT u.id,
+                           u.email,
+                           u.name,
+                           COUNT(s.id) as session_count,
+                           SUM(s.total_tokens) as total_tokens,
+                           AVG(s.total_tokens) as avg_tokens
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    GROUP BY u.id
+                    ORDER BY total_tokens DESC
+                    LIMIT 20
+                """)
+                top_users = await cursor.fetchall()
+        
+        return templates.TemplateResponse("tokens_detail.html", {
+            "request": request,
+            "username": session["username"],
+            "overall_stats": overall_stats,
+            "brand_tokens": brand_tokens,
+            "daily_tokens": daily_tokens,
+            "top_sessions": top_sessions,
+            "top_users": top_users
+        })
+    
+    except Exception as e:
+        logger.error(f"Tokens page error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/recipients", response_class=HTMLResponse)
+async def recipients_page(request: Request, session: dict = Depends(verify_session)):
+    """Recipients listing page grouped by brand"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Get all active brands
+                await cursor.execute("""
+                    SELECT id, brand_key, brand_display_name
+                    FROM brands
+                    WHERE is_active = TRUE
+                    ORDER BY brand_display_name
+                """)
+                brands = await cursor.fetchall()
+                
+                # Get all recipients grouped by brand
+                await cursor.execute("""
+                    SELECT br.*, b.brand_key, b.brand_display_name
+                    FROM brand_recipients br
+                    LEFT JOIN brands b ON br.brand_id = b.id
+                    ORDER BY b.brand_display_name, br.created_at DESC
+                """)
+                all_recipients = await cursor.fetchall()
+                
+                # Group recipients by brand
+                recipients_by_brand = {}
+                for recipient in all_recipients:
+                    brand_id = recipient['brand_id']
+                    if brand_id not in recipients_by_brand:
+                        recipients_by_brand[brand_id] = {
+                            'brand_key': recipient['brand_key'],
+                            'brand_display_name': recipient['brand_display_name'],
+                            'recipients': []
+                        }
+                    recipients_by_brand[brand_id]['recipients'].append(recipient)
+                
+                # Get recipient stats
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_recipients,
+                        COUNT(DISTINCT brand_id) as brands_with_recipients,
+                        SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active_recipients
+                    FROM brand_recipients
+                """)
+                stats = await cursor.fetchone()
+        
+        return templates.TemplateResponse("recipients_list.html", {
+            "request": request,
+            "username": session["username"],
+            "brands": brands,
+            "recipients_by_brand": recipients_by_brand,
+            "stats": stats
+        })
+    
+    except Exception as e:
+        logger.error(f"Recipients page error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/recipients/add")
+async def add_recipients(request: Request, session: dict = Depends(verify_session)):
+    """Add new recipients (supports comma-separated emails)"""
+    try:
+        form_data = await request.form()
+        brand_id = int(form_data.get('brand_id'))
+        emails_input = form_data.get('emails', '').strip()
+        name = form_data.get('name', '').strip()
+        
+        if not emails_input:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        # Split emails by comma and clean them
+        email_list = [email.strip() for email in emails_input.split(',') if email.strip()]
+        
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                added_count = 0
+                for email in email_list:
+                    # Check if recipient already exists for this brand
+                    await cursor.execute("""
+                        SELECT id FROM brand_recipients 
+                        WHERE brand_id = %s AND email = %s
+                    """, (brand_id, email))
+                    
+                    if await cursor.fetchone():
+                        logger.warning(f"Recipient {email} already exists for brand {brand_id}")
+                        continue
+                    
+                    # Insert new recipient
+                    await cursor.execute("""
+                        INSERT INTO brand_recipients (brand_id, email, name, is_active)
+                        VALUES (%s, %s, %s, TRUE)
+                    """, (brand_id, email, name if name else None))
+                    added_count += 1
+                
+                await conn.commit()
+        
+        return JSONResponse({
+            "success": True,
+            "message": f"Successfully added {added_count} recipient(s)",
+            "added_count": added_count
+        })
+    
+    except Exception as e:
+        logger.error(f"Add recipients error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/recipients/{recipient_id}/edit")
+async def edit_recipient(recipient_id: int, request: Request, session: dict = Depends(verify_session)):
+    """Edit a recipient"""
+    try:
+        form_data = await request.form()
+        email = form_data.get('email', '').strip()
+        name = form_data.get('name', '').strip()
+        is_active = form_data.get('is_active') == 'true'
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    UPDATE brand_recipients
+                    SET email = %s, name = %s, is_active = %s
+                    WHERE id = %s
+                """, (email, name if name else None, is_active, recipient_id))
+                await conn.commit()
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Recipient updated successfully"
+        })
+    
+    except Exception as e:
+        logger.error(f"Edit recipient error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/recipients/{recipient_id}/delete")
+async def delete_recipient(recipient_id: int, session: dict = Depends(verify_session)):
+    """Delete a recipient"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    DELETE FROM brand_recipients WHERE id = %s
+                """, (recipient_id,))
+                await conn.commit()
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Recipient deleted successfully"
+        })
+    
+    except Exception as e:
+        logger.error(f"Delete recipient error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/recipients/{recipient_id}/toggle")
+async def toggle_recipient_status(recipient_id: int, session: dict = Depends(verify_session)):
+    """Toggle recipient active status"""
+    try:
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    UPDATE brand_recipients
+                    SET is_active = NOT is_active
+                    WHERE id = %s
+                """, (recipient_id,))
+                await conn.commit()
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Recipient status toggled successfully"
+        })
+    
+    except Exception as e:
+        logger.error(f"Toggle recipient status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Handle HTTP exceptions with custom pages"""
+    
+    # Handle 404 errors
+    if exc.status_code == 404:
+        try:
+            with open("templates/404.html", "r", encoding="utf-8") as f:
+                html_content = f.read()
+            return HTMLResponse(content=html_content, status_code=404)
+        except FileNotFoundError:
+            # Fallback if template not found
+            return HTMLResponse(
+                content=generate_404_html(),
+                status_code=404
+            )
+    
+    # Handle 500 errors
+    elif exc.status_code == 500:
+        try:
+            with open("templates/500.html", "r", encoding="utf-8") as f:
+                html_content = f.read()
+            return HTMLResponse(content=html_content, status_code=500)
+        except FileNotFoundError:
+            return HTMLResponse(
+                content=generate_500_html(),
+                status_code=500
+            )
+    
+    # Handle 403 Forbidden
+    elif exc.status_code == 403:
+        try:
+            with open("templates/403.html", "r", encoding="utf-8") as f:
+                html_content = f.read()
+            return HTMLResponse(content=html_content, status_code=403)
+        except FileNotFoundError:
+            return HTMLResponse(
+                content=generate_403_html(),
+                status_code=403
+            )
+    
+    # For other errors, return JSON
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors"""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors(), "body": exc.body}
+    )
+
+
+@app.exception_handler(500)
+async def internal_server_error_handler(request: Request, exc: Exception):
+    """Handle 500 Internal Server Error"""
+    logger.error(f"Internal server error: {exc}")
+    
+    try:
+        with open("templates/500.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content, status_code=500)
+    except FileNotFoundError:
+        return HTMLResponse(
+            content=generate_500_html(),
+            status_code=500
+        )
+
+
+def generate_404_html():
+    """Generate 404 HTML content dynamically"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>404 - Page Not Found</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+            }
+            .container {
+                text-align: center;
+                padding: 2rem;
+                max-width: 600px;
+            }
+            .error-code {
+                font-size: 10rem;
+                font-weight: 800;
+                background: linear-gradient(45deg, #fff, rgba(255,255,255,0.7));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 1rem;
+                animation: float 3s ease-in-out infinite;
+            }
+            @keyframes float {
+                0%, 100% { transform: translateY(0px); }
+                50% { transform: translateY(-20px); }
+            }
+            h1 { font-size: 2rem; margin-bottom: 1rem; }
+            p { font-size: 1.125rem; margin-bottom: 2rem; opacity: 0.9; }
+            .btn {
+                padding: 0.875rem 2rem;
+                background: #fff;
+                color: #667eea;
+                border: none;
+                border-radius: 50px;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                transition: transform 0.3s;
+            }
+            .btn:hover { transform: translateY(-2px); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-code">404</div>
+            <h1>Page Not Found</h1>
+            <p>The page you're looking for doesn't exist or has been moved.</p>
+            <a href="/" class="btn">Back to Home</a>
+        </div>
+    </body>
+    </html>
+    """
+
+
+def generate_500_html():
+    """Generate 500 HTML content dynamically"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>500 - Server Error</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+            }
+            .container {
+                text-align: center;
+                padding: 2rem;
+                max-width: 600px;
+            }
+            .error-code {
+                font-size: 10rem;
+                font-weight: 800;
+                background: linear-gradient(45deg, #fff, rgba(255,255,255,0.7));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 1rem;
+            }
+            h1 { font-size: 2rem; margin-bottom: 1rem; }
+            p { font-size: 1.125rem; margin-bottom: 2rem; opacity: 0.9; }
+            .btn {
+                padding: 0.875rem 2rem;
+                background: #fff;
+                color: #f5576c;
+                border: none;
+                border-radius: 50px;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                transition: transform 0.3s;
+            }
+            .btn:hover { transform: translateY(-2px); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-code">500</div>
+            <h1>Internal Server Error</h1>
+            <p>Something went wrong on our end. We're working to fix it!</p>
+            <a href="/" class="btn">Back to Home</a>
+        </div>
+    </body>
+    </html>
+    """
+
+
+def generate_403_html():
+    """Generate 403 HTML content dynamically"""
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>403 - Access Denied</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+            }
+            .container {
+                text-align: center;
+                padding: 2rem;
+                max-width: 600px;
+            }
+            .error-code {
+                font-size: 10rem;
+                font-weight: 800;
+                background: linear-gradient(45deg, #fff, rgba(255,255,255,0.7));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 1rem;
+            }
+            h1 { font-size: 2rem; margin-bottom: 1rem; }
+            p { font-size: 1.125rem; margin-bottom: 2rem; opacity: 0.9; }
+            .btn {
+                padding: 0.875rem 2rem;
+                background: #fff;
+                color: #fa709a;
+                border: none;
+                border-radius: 50px;
+                font-size: 1rem;
+                font-weight: 600;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                transition: transform 0.3s;
+                margin: 0 0.5rem;
+            }
+            .btn:hover { transform: translateY(-2px); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="error-code">403</div>
+            <h1>Access Denied</h1>
+            <p>You don't have permission to access this resource.</p>
+            <a href="/admin/login" class="btn">Login</a>
+            <a href="/" class="btn">Back to Home</a>
+        </div>
+    </body>
+    </html>
+    """
+
 # ==================== STARTUP ====================
 
 if __name__ == "__main__":
@@ -1082,9 +2439,7 @@ if __name__ == "__main__":
     print("Multi-Brand Chatbot System Starting...")
     print(f"Port: {PORT}")
     print(f"URL: http://localhost:{PORT}")
-    print(f"Supported Brands: GBPSEO, WhiteDigital")
-    print(f"GBPSEO Recipients: {', '.join(RECIPIENT_EMAILS['gbpseo'])}")
-    print(f"WhiteDigital Recipients: {', '.join(RECIPIENT_EMAILS['whitedigital'])}")
+    print(f"Database: MySQL (Async)")
     print("=" * 50)
     
     uvicorn.run(app, host="0.0.0.0", port=PORT)

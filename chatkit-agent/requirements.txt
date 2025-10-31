@@ -8,6 +8,14 @@ openai>=1.107.1,<2
 python-dotenv>=1.0.0
 anyio>=4.7.0
 pytz==2024.1
+jinja2
+# Database
+aiomysql==0.2.0
+PyMySQL==1.1.0
+cryptography==42.0.0
+
+# Email
+aiosmtplib==3.0.1
 
 # OpenAI Agents SDK (should already be installed in your environment)
 # If not installed, install from your local agents package:

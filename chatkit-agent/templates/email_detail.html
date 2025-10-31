@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Details</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .header-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 64px;
+        }
+
+        .back-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-link:hover {
+            color: #5568d3;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-info {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #1a1a1a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        /* Navigation */
+        .nav-container {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .nav-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 4px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .nav-menu::-webkit-scrollbar {
+            display: none;
+        }
+
+        .nav-item {
+            padding: 14px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #6b7280;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .nav-item:hover {
+            color: #1a1a1a;
+            background: #f9fafb;
+        }
+
+        .nav-item.active {
+            color: #1a1a1a;
+            border-bottom-color: #1a1a1a;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        .email-meta-section {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 28px;
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .email-meta-header {
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .email-meta-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+
+        .email-subject {
+            font-size: 16px;
+            color: #6b7280;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+        }
+
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .meta-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .meta-value {
+            font-size: 14px;
+            color: #1a1a1a;
+            font-weight: 500;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .email-content-section {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 28px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .content-header {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .content-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .email-preview {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            /* padding: 24px; */
+            overflow: auto;
+        }
+
+        .email-preview iframe {
+            width: 100%;
+            min-height: 600px;
+            border: none;
+            background: white;
+            border-radius: 4px;
+        }
+        .btn-primary {
+        background-color: transparent;
+        color: #2f2f2f;
+        border: 2px solid #2f2f2f;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.25s ease-in-out;
+        position: relative;
+    }
+
+    .btn-primary:hover {
+        background-color: #2f2f2f;
+        color: #ffffff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(47, 47, 47, 0.15);
+    }
+
+    .btn-primary:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(47, 47, 47, 0.1);
+    }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 24px 16px;
+            }
+
+            .meta-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .nav-menu {
+                padding-bottom: 4px;
+            }
+
+            .nav-item {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+
+            .email-meta-section,
+            .email-content-section {
+                padding: 20px 16px;
+            }
+
+            .email-meta-title {
+                font-size: 18px;
+            }
+
+            .email-preview iframe {
+                min-height: 400px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-container">
+            <div class="header-left">
+                <h1>Multi-Brand Chatbot Analytics</h1>
+            </div>
+            <div class="header-right">
+                <a href="/admin/recipients">
+                    <button class="btn-primary" style="margin-right: 12px;">Recipients</button>
+                </a>
+                <div class="user-info">
+                    Welcome, <strong>{{ username }}</strong>
+                </div>
+                <a href="/admin/logout">
+                    <button class="btn-logout">Logout</button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="nav-container">
+        <div class="nav-wrapper">
+            <nav class="nav-menu">
+                <a class="nav-item" data-section="overview">Overview</a>
+                <a class="nav-item" data-section="sessions">Total Sessions</a>
+                <a class="nav-item" data-section="users">Total Users</a>
+                <a class="nav-item" data-section="messages">Total Messages</a>
+                <a class="nav-item" data-section="emails">Emails Sent</a>
+                <a class="nav-item" data-section="duration">Avg Duration</a>
+                <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="brands">Active Brands</a>
+            </nav>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="email-meta-section">
+            <div class="email-meta-header">
+                <h1 class="email-meta-title">{{ email.brand_display_name }} - Email Details</h1>
+                <p class="email-subject">{{ email.subject }}</p>
+            </div>
+
+            <div class="meta-grid">
+                <div class="meta-item">
+                    <span class="meta-label">Status</span>
+                    <span class="meta-value">
+                        {% if email.status == 'sent' %}
+                            <span class="badge badge-success">Sent</span>
+                        {% elif email.status == 'failed' %}
+                            <span class="badge badge-warning">Failed</span>
+                        {% else %}
+                            <span class="badge badge-info">Pending</span>
+                        {% endif %}
+                    </span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">Sent At</span>
+                    <span class="meta-value">
+                        {% if email.sent_at %}
+                            {{ email.sent_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                        {% else %}
+                            Not sent yet
+                        {% endif %}
+                    </span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">Brand</span>
+                    <span class="meta-value">{{ email.brand_display_name }}</span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">User</span>
+                    <span class="meta-value">
+                        {% if email.user_name %}
+                            {{ email.user_name }}
+                            <div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">{{ email.user_email }}</div>
+                        {% elif email.user_email %}
+                            {{ email.user_email }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">Recipients</span>
+                    <span class="meta-value">
+                        {% set recipients = email.recipient_emails.split(',') %}
+                        {% for recipient in recipients %}
+                            <div style="margin-bottom: 4px;">{{ recipient.strip() }}</div>
+                        {% endfor %}
+                    </span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">Session ID</span>
+                    <span class="meta-value">
+                        {% if email.session_uuid %}
+                            <code style="font-size: 12px; background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">{{ email.session_uuid[:16] }}...</code>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </span>
+                </div>
+
+                <div class="meta-item">
+                    <span class="meta-label">Attempt Count</span>
+                    <span class="meta-value">{{ email.attempt_count or 1 }}</span>
+                </div>
+
+                {% if email.error_message %}
+                <div class="meta-item" style="grid-column: 1 / -1;">
+                    <span class="meta-label">Error Message</span>
+                    <span class="meta-value" style="color: #ef4444;">{{ email.error_message }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="email-content-section">
+            <div class="content-header">
+                <h2 class="content-title">Email Content</h2>
+            </div>
+
+            <div class="email-preview">
+                {% if email.html_content %}
+                    <iframe id="email-iframe" style="width: 100%; min-height: 600px; border: none; background: white; border-radius: 4px;"></iframe>
+                    <script>
+                        // Properly load HTML content into iframe
+                        const iframe = document.getElementById('email-iframe');
+                        const htmlContent = {{ email.html_content | tojson }};
+                        
+                        // Write content to iframe
+                        iframe.contentWindow.document.open();
+                        iframe.contentWindow.document.write(htmlContent);
+                        iframe.contentWindow.document.close();
+                        
+                        // Auto-adjust iframe height after content loads
+                        iframe.onload = function() {
+                            try {
+                                setTimeout(() => {
+                                    const body = iframe.contentWindow.document.body;
+                                    const html = iframe.contentWindow.document.documentElement;
+                                    const height = Math.max(
+                                        body.scrollHeight,
+                                        body.offsetHeight,
+                                        html.clientHeight,
+                                        html.scrollHeight,
+                                        html.offsetHeight
+                                    );
+                                    iframe.style.height = Math.max(height, 600) + 'px';
+                                }, 100);
+                            } catch (e) {
+                                console.log('Could not adjust iframe height:', e);
+                            }
+                        };
+                    </script>
+                {% else %}
+                    <div style="text-align: center; padding: 48px 24px; color: #9ca3af;">
+                        No email content available
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+     <script>
+    // Smart Navigation System
+    (function() {
+        const navItems = document.querySelectorAll('.nav-item');
+        const sections = {
+            'overview': document.getElementById('overview-section'),
+            'sessions': document.getElementById('sessions-section'),
+            'users': document.getElementById('users-section'),
+            'messages': document.getElementById('messages-section'),
+            'emails': document.getElementById('emails-section'),
+            'duration': document.getElementById('duration-section'),
+            'tokens': document.getElementById('tokens-section'),
+            'brands': document.getElementById('brands-section')
+        };
+
+        // Check if we're on the dashboard page (has sections)
+        const isDashboardPage = Object.values(sections).some(section => section !== null);
+        
+        // Get current page path
+        const currentPath = window.location.pathname;
+
+        // Function to show section (only works on dashboard)
+        function showSection(sectionName) {
+            if (!isDashboardPage) return;
+
+            // Hide all sections
+            Object.values(sections).forEach(section => {
+                if (section) section.classList.add('hidden');
+            });
+
+            // Show selected section
+            if (sections[sectionName]) {
+                sections[sectionName].classList.remove('hidden');
+            }
+
+            // Update active nav item
+            navItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.section === sectionName) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Update URL hash without page reload
+            if (sectionName !== 'overview') {
+                window.history.pushState(null, '', '#' + sectionName);
+            } else {
+                window.history.pushState(null, '', window.location.pathname);
+            }
+
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Handle hash-based navigation on page load
+        if (isDashboardPage) {
+            const hash = window.location.hash.substring(1);
+            if (hash && sections[hash]) {
+                // Show the section from hash
+                showSection(hash);
+            } else {
+                // Show overview by default
+                showSection('overview');
+            }
+        }
+
+        // Set active nav item based on current page (for non-dashboard pages)
+        if (!isDashboardPage) {
+            navItems.forEach(item => {
+                const itemHref = item.getAttribute('href');
+                // Mark as active if href matches current path
+                if (itemHref && currentPath === itemHref) {
+                    item.classList.add('active');
+                }
+            });
+        }
+
+        // Add click handlers to nav items
+        navItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                const itemHref = item.getAttribute('href');
+                const itemSection = item.dataset.section;
+
+                // If on dashboard page
+                if (isDashboardPage) {
+                    if (itemSection) {
+                        e.preventDefault();
+                        showSection(itemSection);
+                    }
+                }
+                // If NOT on dashboard page
+                else {
+                    // If item has NO href but has data-section, redirect to dashboard with hash
+                    if (!itemHref && itemSection) {
+                        e.preventDefault();
+                        window.location.href = '/admin/dashboard#' + itemSection;
+                    }
+                    // If item has href, allow normal navigation
+                }
+            });
+        });
+
+        // Add click handlers to stat cards for navigation (only on dashboard)
+        if (isDashboardPage) {
+            const statCards = document.querySelectorAll('.stat-card[data-navigate]');
+            statCards.forEach(card => {
+                card.addEventListener('click', () => {
+                    const section = card.dataset.navigate;
+                    showSection(section);
+                });
+            });
+
+            // Auto-refresh dashboard every 120 seconds (only on dashboard)
+            setTimeout(function() {
+                location.reload();
+            }, 120000);
+        }
+    })();
+</script>
+</body>
+</html>

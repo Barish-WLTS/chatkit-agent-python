@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ user.email }} - User Details</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .header-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 64px;
+        }
+
+        .back-link {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-link:hover {
+            color: #5568d3;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-info {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #1a1a1a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        /* Navigation */
+        .nav-container {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .nav-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 4px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .nav-menu::-webkit-scrollbar {
+            display: none;
+        }
+
+        .nav-item {
+            padding: 14px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #6b7280;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .nav-item:hover {
+            color: #1a1a1a;
+            background: #f9fafb;
+        }
+
+        .nav-item.active {
+            color: #1a1a1a;
+            border-bottom-color: #1a1a1a;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        .user-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            border-radius: 12px;
+            margin-bottom: 32px;
+        }
+
+        .user-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .user-email {
+            font-size: 16px;
+            opacity: 0.95;
+            margin-bottom: 24px;
+        }
+
+        .user-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 24px;
+            font-size: 14px;
+            opacity: 0.95;
+        }
+
+        .user-meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-meta-label {
+            opacity: 0.8;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .user-meta-value {
+            font-size: 16px;
+            font-weight: 500;
+            margin-top: 4px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            color: #1a1a1a;
+            letter-spacing: -0.02em;
+        }
+
+        .section {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 28px;
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            background: #f9fafb;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 14px;
+            color: #374151;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr {
+            transition: background 0.15s ease;
+            cursor: pointer;
+        }
+
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 48px 24px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+
+        .email-preview {
+            background: #f9fafb;
+            padding: 16px;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+            margin-top: 8px;
+            font-size: 13px;
+            color: #6b7280;
+            max-height: 100px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .email-preview::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 40px;
+            background: linear-gradient(transparent, #f9fafb);
+        }
+        .btn-primary {
+        background-color: transparent;
+        color: #2f2f2f;
+        border: 2px solid #2f2f2f;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        cursor: pointer;
+        transition: all 0.25s ease-in-out;
+        position: relative;
+    }
+
+    .btn-primary:hover {
+        background-color: #2f2f2f;
+        color: #ffffff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(47, 47, 47, 0.15);
+    }
+
+    .btn-primary:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(47, 47, 47, 0.1);
+    }
+
+        @media (max-width: 768px) {
+            .user-header {
+                padding: 24px;
+            }
+
+            .user-header h1 {
+                font-size: 22px;
+            }
+
+             .nav-menu {
+                padding-bottom: 4px;
+            }
+
+            .nav-item {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .user-meta {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .container {
+                padding: 24px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-container">
+            <div class="header-left">
+                <h1>Multi-Brand Chatbot Analytics</h1>
+            </div>
+            <div class="header-right">
+                <a href="/admin/recipients">
+                    <button class="btn-primary" style="margin-right: 12px;">Recipients</button>
+                </a>
+                <div class="user-info">
+                    Welcome, <strong>{{ username }}</strong>
+                </div>
+                <a href="/admin/logout">
+                    <button class="btn-logout">Logout</button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="nav-container">
+        <div class="nav-wrapper">
+            <nav class="nav-menu">
+                <a class="nav-item" data-section="overview">Overview</a>
+                <a class="nav-item" data-section="sessions">Total Sessions</a>
+                <a class="nav-item" data-section="users">Total Users</a>
+                <a class="nav-item" data-section="messages">Total Messages</a>
+                <a class="nav-item" data-section="emails">Emails Sent</a>
+                <a class="nav-item" data-section="duration">Avg Duration</a>
+                <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="brands">Active Brands</a>
+            </nav>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="user-header">
+            <h1>{{ user.name or 'Anonymous User' }}</h1>
+            <div class="user-email">{{ user.email }}</div>
+            <div class="user-meta">
+                {% if user.phone %}
+                <div class="user-meta-item">
+                    <span class="user-meta-label">Phone</span>
+                    <span class="user-meta-value">{{ user.phone }}</span>
+                </div>
+                {% endif %}
+                {% if user.business_name %}
+                <div class="user-meta-item">
+                    <span class="user-meta-label">Business</span>
+                    <span class="user-meta-value">{{ user.business_name }}</span>
+                </div>
+                {% endif %}
+                {% if user.location %}
+                <div class="user-meta-item">
+                    <span class="user-meta-label">Location</span>
+                    <span class="user-meta-value">{{ user.location }}</span>
+                </div>
+                {% endif %}
+                {% if user.city or user.country %}
+                <div class="user-meta-item">
+                    <span class="user-meta-label">Geographic</span>
+                    <span class="user-meta-value">{{ user.city or 'Unknown' }}, {{ user.country or 'Unknown' }}</span>
+                </div>
+                {% endif %}
+                <div class="user-meta-item">
+                    <span class="user-meta-label">First Seen</span>
+                    <span class="user-meta-value">{{ user.first_seen.strftime('%Y-%m-%d') if user.first_seen else '-' }}</span>
+                </div>
+                <div class="user-meta-item">
+                    <span class="user-meta-label">Last Seen</span>
+                    <span class="user-meta-value">{{ user.last_seen.strftime('%Y-%m-%d') if user.last_seen else '-' }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Sessions</div>
+                <div class="stat-value">{{ user.total_sessions or 0 }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Messages</div>
+                <div class="stat-value">{{ user.total_messages or 0 }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Tokens</div>
+                <div class="stat-value">
+                    {% if user.total_tokens %}
+                        {{ "%.1f"|format(user.total_tokens / 1000) }}K
+                    {% else %}
+                        0
+                    {% endif %}
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Emails Received</div>
+                <div class="stat-value">{{ user.emails_received or 0 }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Session Duration</div>
+                <div class="stat-value">
+                    {% if user.avg_session_duration %}
+                        {{ "%.0f"|format(user.avg_session_duration / 60) }}m
+                    {% else %}
+                        0m
+                    {% endif %}
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Conversations</div>
+                <div class="stat-value">{{ user.total_conversations or 0 }}</div>
+            </div>
+        </div>
+
+        {% if brand_interactions %}
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Brand Interactions</h2>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Brand</th>
+                            <th>Sessions</th>
+                            <th>Messages</th>
+                            <th>Emails</th>
+                            <th>Tokens</th>
+                            <th>Last Interaction</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for interaction in brand_interactions %}
+                        <tr onclick="window.location.href='/admin/brand/{{ interaction.brand_id }}'">
+                            <td><strong>{{ interaction.brand_display_name }}</strong></td>
+                            <td>{{ interaction.total_sessions }}</td>
+                            <td>{{ interaction.total_messages }}</td>
+                            <td>{{ interaction.total_emails_sent }}</td>
+                            <td>{{ interaction.total_tokens }}</td>
+                            <td style="font-size: 13px; color: #6b7280;">
+                                {{ interaction.last_interaction.strftime('%Y-%m-%d %H:%M') if interaction.last_interaction else '-' }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Sessions ({{ sessions|length }})</h2>
+            </div>
+            {% if sessions %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Brand</th>
+                            <th>Messages</th>
+                            <th>Tokens</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for session in sessions %}
+                        <tr>
+                            <td><code>{{ session.session_id[:16] }}...</code></td>
+                            <td><strong>{{ session.brand_display_name }}</strong></td>
+                            <td>{{ session.message_count }}</td>
+                            <td>{{ session.total_tokens }}</td>
+                            <td>
+                                {% if session.status == 'active' %}
+                                    <span class="badge badge-success">Active</span>
+                                {% elif session.status == 'ended' %}
+                                    <span class="badge badge-info">Ended</span>
+                                {% else %}
+                                    <span class="badge badge-warning">Timeout</span>
+                                {% endif %}
+                                {% if session.email_sent %}
+                                    <span class="badge badge-success" style="margin-left: 4px;">Emailed</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 13px; color: #6b7280;">
+                                {{ session.started_at.strftime('%Y-%m-%d %H:%M') }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No sessions found</div>
+            {% endif %}
+        </div>
+
+        {% if emails %}
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Emails Received ({{ emails|length }})</h2>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Brand</th>
+                            <th>Subject</th>
+                            <th>Status</th>
+                            <th>Sent At</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for email in emails %}
+                        <tr>
+                            <td><strong>{{ email.brand_display_name }}</strong></td>
+                            <td>{{ email.subject }}</td>
+                            <td>
+                                {% if email.status == 'sent' %}
+                                    <span class="badge badge-success">Sent</span>
+                                {% elif email.status == 'failed' %}
+                                    <span class="badge badge-warning">Failed</span>
+                                {% else %}
+                                    <span class="badge badge-info">Pending</span>
+                                {% endif %}
+                            </td>
+                            <td style="font-size: 13px; color: #6b7280;">
+                                {% if email.sent_at %}
+                                    {{ email.sent_at.strftime('%Y-%m-%d %H:%M') }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="/admin/email/{{ email.id }}" style="color: #667eea; text-decoration: none; font-weight: 500;">View Email</a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if activity_timeline %}
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Activity Timeline (Last 30 Days)</h2>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Sessions</th>
+                            <th>Messages</th>
+                            <th>Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for activity in activity_timeline %}
+                        <tr>
+                            <td><strong>{{ activity.date.strftime('%Y-%m-%d') }}</strong></td>
+                            <td>{{ activity.session_count }}</td>
+                            <td>{{ activity.message_count }}</td>
+                            <td>{{ activity.token_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+    // Smart Navigation System
+    (function() {
+        const navItems = document.querySelectorAll('.nav-item');
+        const sections = {
+            'overview': document.getElementById('overview-section'),
+            'sessions': document.getElementById('sessions-section'),
+            'users': document.getElementById('users-section'),
+            'messages': document.getElementById('messages-section'),
+            'emails': document.getElementById('emails-section'),
+            'duration': document.getElementById('duration-section'),
+            'tokens': document.getElementById('tokens-section'),
+            'brands': document.getElementById('brands-section')
+        };
+
+        // Check if we're on the dashboard page (has sections)
+        const isDashboardPage = Object.values(sections).some(section => section !== null);
+        
+        // Get current page path
+        const currentPath = window.location.pathname;
+
+        // Function to show section (only works on dashboard)
+        function showSection(sectionName) {
+            if (!isDashboardPage) return;
+
+            // Hide all sections
+            Object.values(sections).forEach(section => {
+                if (section) section.classList.add('hidden');
+            });
+
+            // Show selected section
+            if (sections[sectionName]) {
+                sections[sectionName].classList.remove('hidden');
+            }
+
+            // Update active nav item
+            navItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.section === sectionName) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Update URL hash without page reload
+            if (sectionName !== 'overview') {
+                window.history.pushState(null, '', '#' + sectionName);
+            } else {
+                window.history.pushState(null, '', window.location.pathname);
+            }
+
+            // Scroll to top
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Handle hash-based navigation on page load
+        if (isDashboardPage) {
+            const hash = window.location.hash.substring(1);
+            if (hash && sections[hash]) {
+                // Show the section from hash
+                showSection(hash);
+            } else {
+                // Show overview by default
+                showSection('overview');
+            }
+        }
+
+        // Set active nav item based on current page (for non-dashboard pages)
+        if (!isDashboardPage) {
+            navItems.forEach(item => {
+                const itemHref = item.getAttribute('href');
+                // Mark as active if href matches current path
+                if (itemHref && currentPath === itemHref) {
+                    item.classList.add('active');
+                }
+            });
+        }
+
+        // Add click handlers to nav items
+        navItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                const itemHref = item.getAttribute('href');
+                const itemSection = item.dataset.section;
+
+                // If on dashboard page
+                if (isDashboardPage) {
+                    if (itemSection) {
+                        e.preventDefault();
+                        showSection(itemSection);
+                    }
+                }
+                // If NOT on dashboard page
+                else {
+                    // If item has NO href but has data-section, redirect to dashboard with hash
+                    if (!itemHref && itemSection) {
+                        e.preventDefault();
+                        window.location.href = '/admin/dashboard#' + itemSection;
+                    }
+                    // If item has href, allow normal navigation
+                }
+            });
+        });
+
+        // Add click handlers to stat cards for navigation (only on dashboard)
+        if (isDashboardPage) {
+            const statCards = document.querySelectorAll('.stat-card[data-navigate]');
+            statCards.forEach(card => {
+                card.addEventListener('click', () => {
+                    const section = card.dataset.navigate;
+                    showSection(section);
+                });
+            });
+
+            // Auto-refresh dashboard every 120 seconds (only on dashboard)
+            setTimeout(function() {
+                location.reload();
+            }, 120000);
+        }
+    })();
+</script>
+</body>
+</html>
