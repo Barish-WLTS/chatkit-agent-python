@@ -121,6 +121,62 @@
             border-bottom-color: #1a1a1a;
         }
 
+        /* Breadcrumb Styles */
+        .breadcrumb-nav {
+            padding: 12px 24px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            list-style: none;
+            gap: 8px;
+            padding: 8px 16px;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(229, 231, 235, 0.5);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            width: fit-content;
+        }
+
+        .breadcrumb-item {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .breadcrumb-item:not(:last-child)::after {
+            content: '›';
+            margin-left: 8px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+
+        .breadcrumb-item a {
+            color: #6b7280;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .breadcrumb-item a:hover {
+            color: #1a1a1a;
+            background: rgba(243, 244, 246, 0.8);
+        }
+
+        .breadcrumb-item.active span {
+            color: #1a1a1a;
+            font-weight: 500;
+            padding: 4px 8px;
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -409,11 +465,29 @@
                 <a class="nav-item" data-section="emails">Emails Sent</a>
                 <a class="nav-item" data-section="duration">Avg Duration</a>
                 <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="costs">Total Costs</a>
                 <a class="nav-item" data-section="brands">Active Brands</a>
             </nav>
         </div>
     </div>
 
+    <!-- Breadcrumb Navigation -->
+    {% if breadcrumbs %}
+    <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+        <ol class="breadcrumb">
+            {% for item in breadcrumbs %}
+            <li class="breadcrumb-item {% if item.active %}active{% endif %}">
+                {% if item.url and not item.active %}
+                    <a href="{{ item.url }}">{{ item.label }}</a>
+                {% else %}
+                    <span>{{ item.label }}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
+    
     <div class="container">
         <div class="user-header">
             <h1>{{ user.name or 'Anonymous User' }}</h1>
@@ -474,6 +548,26 @@
                 </div>
             </div>
             <div class="stat-card">
+                <div class="stat-label">Total Cost</div>
+                <div class="stat-value">
+                    {% if user.total_cost %}
+                        ${{ "%.4f"|format(user.total_cost) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Cost/Session</div>
+                <div class="stat-value">
+                    {% if user.avg_cost_per_session %}
+                        ${{ "%.4f"|format(user.avg_cost_per_session) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+            </div>
+            <div class="stat-card">
                 <div class="stat-label">Emails Received</div>
                 <div class="stat-value">{{ user.emails_received or 0 }}</div>
             </div>
@@ -507,6 +601,8 @@
                             <th>Messages</th>
                             <th>Emails</th>
                             <th>Tokens</th>
+                            <th>Total Cost</th>
+                            <th>Avg Cost/Session</th>
                             <th>Last Interaction</th>
                         </tr>
                     </thead>
@@ -518,6 +614,16 @@
                             <td>{{ interaction.total_messages }}</td>
                             <td>{{ interaction.total_emails_sent }}</td>
                             <td>{{ interaction.total_tokens }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">
+                                ${{ "%.4f"|format(interaction.total_cost or 0) }}
+                            </td>
+                            <td style="color: #6b7280;">
+                                {% if interaction.total_sessions and interaction.total_cost %}
+                                    ${{ "%.4f"|format(interaction.total_cost / interaction.total_sessions) }}
+                                {% else %}
+                                    $0.00
+                                {% endif %}
+                            </td>
                             <td style="font-size: 13px; color: #6b7280;">
                                 {{ interaction.last_interaction.strftime('%Y-%m-%d %H:%M') if interaction.last_interaction else '-' }}
                             </td>
@@ -542,6 +648,10 @@
                             <th>Brand</th>
                             <th>Messages</th>
                             <th>Tokens</th>
+                            <th>Model</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
                             <th>Status</th>
                             <th>Started</th>
                         </tr>
@@ -553,6 +663,10 @@
                             <td><strong>{{ session.brand_display_name }}</strong></td>
                             <td>{{ session.message_count }}</td>
                             <td>{{ session.total_tokens }}</td>
+                            <td><code style="font-size: 11px;">{{ session.model_name or 'N/A' }}</code></td>
+                            <td style="color: #059669;">${{ "%.4f"|format(session.input_cost or 0) }}</td>
+                            <td style="color: #dc2626;">${{ "%.4f"|format(session.output_cost or 0) }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">${{ "%.4f"|format(session.total_cost or 0) }}</td>
                             <td>
                                 {% if session.status == 'active' %}
                                     <span class="badge badge-success">Active</span>
@@ -616,7 +730,7 @@
                                 {% endif %}
                             </td>
                             <td>
-                                <a href="/admin/email/{{ email.id }}" style="color: #667eea; text-decoration: none; font-weight: 500;">View Email</a>
+                                <a href="/admin/email/{{ email.id }}" style="color: #667eea; text-decoration: none; font-weight: 500;">View Conversation</a>
                             </td>
                         </tr>
                         {% endfor %}
@@ -639,6 +753,9 @@
                             <th>Sessions</th>
                             <th>Messages</th>
                             <th>Tokens</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -648,6 +765,9 @@
                             <td>{{ activity.session_count }}</td>
                             <td>{{ activity.message_count }}</td>
                             <td>{{ activity.token_count }}</td>
+                            <td style="color: #059669;">${{ "%.4f"|format(activity.input_cost or 0) }}</td>
+                            <td style="color: #dc2626;">${{ "%.4f"|format(activity.output_cost or 0) }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">${{ "%.4f"|format(activity.total_cost or 0) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -669,6 +789,7 @@
             'emails': document.getElementById('emails-section'),
             'duration': document.getElementById('duration-section'),
             'tokens': document.getElementById('tokens-section'),
+            'costs': document.getElementById('costs-section'),
             'brands': document.getElementById('brands-section')
         };
 

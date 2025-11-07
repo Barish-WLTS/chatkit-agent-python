@@ -124,6 +124,63 @@
             border-bottom-color: #1a1a1a;
         }
 
+        /* Breadcrumb Styles */
+        .breadcrumb-nav {
+            padding: 12px 24px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            list-style: none;
+            gap: 8px;
+            padding: 8px 16px;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(229, 231, 235, 0.5);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            width: fit-content;
+        }
+
+        .breadcrumb-item {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .breadcrumb-item:not(:last-child)::after {
+            content: '›';
+            margin-left: 8px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+
+        .breadcrumb-item a {
+            color: #6b7280;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .breadcrumb-item a:hover {
+            color: #1a1a1a;
+            background: rgba(243, 244, 246, 0.8);
+        }
+
+        .breadcrumb-item.active span {
+            color: #1a1a1a;
+            font-weight: 500;
+            padding: 4px 8px;
+        }
+
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -393,10 +450,28 @@
                 <a class="nav-item" data-section="emails">Emails Sent</a>
                 <a class="nav-item" data-section="duration">Avg Duration</a>
                 <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="costs">Total Costs</a>
                 <a class="nav-item" data-section="brands">Active Brands</a>
             </nav>
         </div>
     </div>
+
+    <!-- Breadcrumb Navigation -->
+    {% if breadcrumbs %}
+    <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+        <ol class="breadcrumb">
+            {% for item in breadcrumbs %}
+            <li class="breadcrumb-item {% if item.active %}active{% endif %}">
+                {% if item.url and not item.active %}
+                    <a href="{{ item.url }}">{{ item.label }}</a>
+                {% else %}
+                    <span>{{ item.label }}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
 
     <div class="container">
         <div class="page-header">
@@ -458,6 +533,54 @@
                 <div class="stat-value">{{ overall_stats.total_sessions or 0 }}</div>
                 <div class="stat-subtext">With token data</div>
             </div>
+
+            <div class="stat-card highlight">
+                <div class="stat-label">Total Cost</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_cost %}
+                        ${{ "{:,.4f}".format(overall_stats.total_cost) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">All-time cost</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Input Cost</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_input_cost %}
+                        ${{ "{:,.4f}".format(overall_stats.total_input_cost) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">User message costs</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Output Cost</div>
+                <div class="stat-value">
+                    {% if overall_stats.total_output_cost %}
+                        ${{ "{:,.4f}".format(overall_stats.total_output_cost) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">AI response costs</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-label">Avg Cost/Session</div>
+                <div class="stat-value">
+                    {% if overall_stats.avg_cost_per_session %}
+                        ${{ "%.4f"|format(overall_stats.avg_cost_per_session) }}
+                    {% else %}
+                        $0.00
+                    {% endif %}
+                </div>
+                <div class="stat-subtext">Average cost</div>
+            </div>
         </div>
 
         <div class="section">
@@ -475,6 +598,10 @@
                             <th>Input Tokens</th>
                             <th>Output Tokens</th>
                             <th>Avg per Session</th>
+                            <th>Total Cost</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Avg Cost</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -493,6 +620,10 @@
                             <td>{{ "{:,.0f}".format(brand.input_tokens or 0) }}</td>
                             <td>{{ "{:,.0f}".format(brand.output_tokens or 0) }}</td>
                             <td>{{ "%.0f"|format(brand.avg_tokens or 0) }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">${{ "{:,.4f}".format(brand.total_cost or 0) }}</td>
+                            <td style="color: #059669;">${{ "{:,.4f}".format(brand.input_cost or 0) }}</td>
+                            <td style="color: #dc2626;">${{ "{:,.4f}".format(brand.output_cost or 0) }}</td>
+                            <td style="color: #6b7280;">${{ "%.4f"|format(brand.avg_cost or 0) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -518,6 +649,10 @@
                             <th>Input Tokens</th>
                             <th>Output Tokens</th>
                             <th>Avg per Session</th>
+                            <th>Total Cost</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Avg Cost</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -529,6 +664,10 @@
                             <td>{{ "{:,.0f}".format(day.input_tokens) }}</td>
                             <td>{{ "{:,.0f}".format(day.output_tokens) }}</td>
                             <td>{{ "%.0f"|format(day.avg_tokens) }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">${{ "{:,.4f}".format(day.total_cost or 0) }}</td>
+                            <td style="color: #059669;">${{ "{:,.4f}".format(day.input_cost or 0) }}</td>
+                            <td style="color: #dc2626;">${{ "{:,.4f}".format(day.output_cost or 0) }}</td>
+                            <td style="color: #6b7280;">${{ "%.4f"|format(day.avg_cost or 0) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -553,6 +692,8 @@
                             <th>User</th>
                             <th>Total Tokens</th>
                             <th>Token Breakdown</th>
+                            <th>Total Cost</th>
+                            <th>Cost Breakdown</th>
                             <th>Messages</th>
                             <th>Date</th>
                         </tr>
@@ -579,6 +720,21 @@
                                     <div class="token-item">
                                         <span class="token-item-label">Output</span>
                                         <span class="token-item-value">{{ "{:,.0f}".format(session.total_output_tokens) }}</span>
+                                    </div>
+                                </div>
+                            </td>
+                            <td style="font-weight: 600; color: #1f2937;">
+                                <strong>${{ "%.4f"|format(session.total_cost or 0) }}</strong>
+                            </td>
+                            <td>
+                                <div class="token-breakdown">
+                                    <div class="token-item">
+                                        <span class="token-item-label" style="color: #059669;">Input</span>
+                                        <span class="token-item-value" style="color: #059669;">${{ "%.4f"|format(session.input_cost or 0) }}</span>
+                                    </div>
+                                    <div class="token-item">
+                                        <span class="token-item-label" style="color: #dc2626;">Output</span>
+                                        <span class="token-item-value" style="color: #dc2626;">${{ "%.4f"|format(session.output_cost or 0) }}</span>
                                     </div>
                                 </div>
                             </td>
@@ -610,19 +766,27 @@
                             <th>Sessions</th>
                             <th>Total Tokens</th>
                             <th>Avg per Session</th>
+                            <th>Total Cost</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Avg Cost</th>
                         </tr>
                     </thead>
-                        <tbody>
-                            {% for user in top_users %}
-                            <tr onclick="{% if user.id %}window.location.href='/admin/user/{{ user.id }}'{% endif %}" style="cursor: {% if user.id %}pointer{% else %}default{% endif %};">
-                                <td><strong>{{ user.email }}</strong></td>
-                                <td>{{ user.name or '-' }}</td>
-                                <td>{{ user.session_count }}</td>
-                                <td><strong>{{ "{:,.0f}".format(user.total_tokens or 0) }}</strong></td>
-                                <td>{{ "%.0f"|format(user.avg_tokens or 0) }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
+                    <tbody>
+                        {% for user in top_users %}
+                        <tr onclick="{% if user.id %}window.location.href='/admin/user/{{ user.id }}'{% endif %}" style="cursor: {% if user.id %}pointer{% else %}default{% endif %};">
+                            <td><strong>{{ user.email }}</strong></td>
+                            <td>{{ user.name or '-' }}</td>
+                            <td>{{ user.session_count }}</td>
+                            <td><strong>{{ "{:,.0f}".format(user.total_tokens or 0) }}</strong></td>
+                            <td>{{ "%.0f"|format(user.avg_tokens or 0) }}</td>
+                            <td style="font-weight: 600; color: #1f2937;">${{ "{:,.4f}".format(user.total_cost or 0) }}</td>
+                            <td style="color: #059669;">${{ "{:,.4f}".format(user.input_cost or 0) }}</td>
+                            <td style="color: #dc2626;">${{ "{:,.4f}".format(user.output_cost or 0) }}</td>
+                            <td style="color: #6b7280;">${{ "%.4f"|format(user.avg_cost or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
                 </table>
             </div>
             {% else %}
@@ -643,6 +807,7 @@
             'emails': document.getElementById('emails-section'),
             'duration': document.getElementById('duration-section'),
             'tokens': document.getElementById('tokens-section'),
+            'costs': document.getElementById('costs-section'),
             'brands': document.getElementById('brands-section')
         };
 

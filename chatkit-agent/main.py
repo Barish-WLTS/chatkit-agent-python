@@ -31,6 +31,7 @@ from agents import (
     Runner,
     TResponseInputItem,
 )
+from openai.types.shared.reasoning import Reasoning
 
 # Import database handler
 from database import db_handler, db_pool
@@ -43,7 +44,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 SMTP_HOST = os.getenv("SMTP_HOST", "mail.gbpseo.in")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "chatbot@gbpseo.in")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "XXXXXXXXXXX")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "XXXXXXXx")
 SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "chatbot@gbpseo.in")
 SMTP_FROM_NAME = "Chatbot"
 
@@ -73,10 +74,10 @@ class UserLocation(BaseModel):
 class ConversationSession(BaseModel):
     """Track conversation state (in-memory for performance)"""
     session_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    session_db_id: Optional[int] = None  # DB primary key
+    session_db_id: Optional[int] = None
     brand: str = Field(default="gbpseo")
-    brand_id: Optional[int] = None  # DB brand id
-    user_id: Optional[int] = None  # DB user id
+    brand_id: Optional[int] = None
+    user_id: Optional[int] = None
     user_context: UserContext = Field(default_factory=UserContext)
     user_location: UserLocation = Field(default_factory=UserLocation)
     conversation_history: List[TResponseInputItem] = Field(default_factory=list)
@@ -89,6 +90,13 @@ class ConversationSession(BaseModel):
     last_output_tokens: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    model_name: str = "gpt-4.1-nano"
+    last_input_cost: float = 0.0
+    last_output_cost: float = 0.0
+    last_total_cost: float = 0.0
+    total_input_cost: float = 0.0
+    total_output_cost: float = 0.0
+    total_cost: float = 0.0
 
 
 class ChatMessage(BaseModel):
@@ -133,7 +141,6 @@ CRITICAL RESPONSE RULES:
 - Every response must be at least 2-3 sentences with real value
 - If you're not sure, still provide your best answer based on GBP knowledge
 - Use proper markdown formatting in ALL responses
-- NEVER include citation markers like 【】 or †source in your responses
 
 CONTACT INFORMATION HANDLING:
 - If the user provides their contact information (phone number, mobile number) AND requests a callback or asks to connect with the team, acknowledge professionally
@@ -167,11 +174,23 @@ Do not:
 - **Mention or reference data sources, files, or documents** (e.g., "According to a GBPSEO FAQ document" or "Based on the provided data")
 
 
-**CITATION AND SOURCE HANDLING:**
-    - NEVER include citation markers like 【】 or †source in your responses
-    - Do NOT mention file names, document references, or data sources
-    - Present information naturally as if it's your own knowledge
-    - Remove any automatic citations before responding
+**SOURCE AND CITATION HANDLING (CRITICAL):**
+- NEVER include citation markers like 【】 or †source in your responses
+- NEVER mention data sources, files, or documents in any form:
+  ❌ "Based on the information from the documents"
+  ❌ "According to the GBPSEO FAQ document"
+  ❌ "The file indicates that..."
+  ❌ "From the provided data..."
+- Present all information naturally as your own expert knowledge
+- Speak directly and confidently without referencing sources
+- Remove any automatic citations or source references before responding
+
+**CONTACT INFORMATION APPENDING RULE:**
+    - At the end of **every** response, include this short signature line in a new paragraph:
+    "🕾 For direct assistance, contact our team at **+91-9894256988** or email **hello@gbpseo.in**."
+    - The line must always appear at the **bottom** of the message, after all other information or CTAs.
+    - Do NOT paraphrase or reformat this line — always use it exactly as written.
+
     """,
     model="gpt-4.1-nano",
     tools=[gbp_file_search],
@@ -212,7 +231,7 @@ CRITICAL RESPONSE RULES:
 - Always provide value first before asking for contact details
 - If unsure about something, still offer your best insight based on PPC best practices
 - Always be confident, data-informed, and results-focused
-- NEVER include citation markers like 【】 or †source in your responses
+- Use proper Markdown formatting in all responses
 
 CONTACT INFORMATION HANDLING:
 - If the user provides their contact information (phone number, email) AND requests a callback or asks to connect with the team, acknowledge professionally
@@ -248,18 +267,31 @@ Do Not:
 - Ask for contact information unless the user indicates they want to be contacted
 - **Mention or reference data sources, files, or documents** (e.g., "According to a whiteDigital FAQ document" or "Based on the provided data")
 
-**CITATION AND SOURCE HANDLING:**
-    - NEVER include citation markers like 【】 or †source in your responses
-    - Do NOT mention file names, document references, or data sources
-    - Present information naturally as if it's your own knowledge
-    - Remove any automatic citations before responding
+**SOURCE AND CITATION HANDLING (CRITICAL):**
+- NEVER include citation markers like 【】 or †source in your responses
+- NEVER mention data sources, files, or documents in any form:
+  ❌ "Based on the information from the documents"
+  ❌ "According to the whiteDigital documentation"
+  ❌ "The file indicates that..."
+  ❌ "From the provided data..."
+  ❌ "The data shows..."
+- Present all information naturally as your own PPC expertise
+- Speak directly and confidently as a trusted PPC strategist
+- Remove any automatic citations or source references before responding
+- Sound like a human expert who simply knows this information
+
+**CONTACT INFORMATION APPENDING RULE:**
+    - At the end of **every** response, include this short signature line in a new paragraph:
+    "🕾 For direct assistance, contact our team at **+91-9498099971** or email **info@whitedigital.in**."
+    - The line must always appear at the **bottom** of the message, after all other information or CTAs.
+    - Do NOT paraphrase or reformat this line — always use it exactly as written.
 
 Goal: Help users understand whiteDigital's PPC services, build trust, guide them to book a Free PPC Audit, and provide expert PPC advice.""",
     model="gpt-4.1-nano",
     tools=[whitedigital_file_search],
     model_settings=ModelSettings(
-        temperature=1,
-        top_p=1,
+        temperature=0.7,
+        top_p=0.9,
         max_tokens=600,
         store=True
     )
@@ -461,6 +493,8 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         
         display_text = re.sub(r'\[SYSTEM NOTE:.*?\]', '', text_content, flags=re.IGNORECASE | re.DOTALL).strip()
         display_text = re.sub(r'\[.*?uploaded file:.*?\]', '📎 Uploaded a file', display_text, flags=re.IGNORECASE).strip()
+        display_text = re.sub(r'【[^】]*?†source】', '', display_text)
+        display_text = re.sub(r'【\d+:[^】]*】', '', display_text)
         
         if not display_text:
             continue
@@ -523,6 +557,7 @@ async def send_conversation_email(session: ConversationSession) -> bool:
     <div class="meta">
         <strong>Brand:</strong> {brand_display}<br>
         <strong>Session ID:</strong> {session.session_id}<br>
+        <strong>Model Used:</strong> {session.model_name}<br>
         <strong>Started:</strong> {created_ist}<br>
         <strong>Last Activity:</strong> {last_activity_ist}<br>
         <strong>Duration:</strong> {duration_minutes} minutes<br>
@@ -531,10 +566,15 @@ async def send_conversation_email(session: ConversationSession) -> bool:
         <strong>Last Input Tokens:</strong> {session.last_input_tokens}<br>
         <strong>Last Output Tokens:</strong> {session.last_output_tokens}<br>
         <strong>Last Total Tokens:</strong> {session.last_token_usage}<br>
-        <strong>Total Input Tokens (Conversation):</strong> {session.total_input_tokens}<br>
-        <strong>Total Output Tokens (Conversation):</strong> {session.total_output_tokens}<br>
-        <strong>Grand Total Tokens:</strong> {session.total_input_tokens + session.total_output_tokens}
-        </div>
+        <strong>Total Input Tokens:</strong> {session.total_input_tokens}<br>
+        <strong>Total Output Tokens:</strong> {session.total_output_tokens}<br>
+        <strong>Grand Total Tokens:</strong> {session.total_input_tokens + session.total_output_tokens}<br>
+        <hr style="margin: 10px 0; border: none; border-top: 1px solid #ddd;">
+        <strong style="color: #28a745;">Cost Breakdown:</strong><br>
+        <strong>Input Cost:</strong> ${session.total_input_cost:.6f}<br>
+        <strong>Output Cost:</strong> ${session.total_output_cost:.6f}<br>
+        <strong style="color: #28a745;">Total Session Cost:</strong> <span style="font-size: 1.1em;">${session.total_cost:.6f}</span>
+    </div>
     """
     
     # Email HTML content
@@ -927,30 +967,44 @@ async def chat(chat_msg: ChatMessage):
                             output_tokens = usage_data.get('output_tokens', 0)
                             token_usage = usage_data.get('total_tokens', input_tokens + output_tokens)
                     
+                    # ✅ CALCULATE COSTS
+                    input_cost, output_cost, total_cost = await db_handler.calculate_token_cost(
+                        input_tokens,
+                        output_tokens,
+                        session.model_name
+                    )
+                    
                     print(f"🔢 Token usage for this request:")
-                    print(f"   Input Tokens: {input_tokens}")
-                    print(f"   Output Tokens: {output_tokens}")
-                    print(f"   Total Tokens: {token_usage}")
+                    print(f"   Input Tokens: {input_tokens} (${input_cost:.6f})")
+                    print(f"   Output Tokens: {output_tokens} (${output_cost:.6f})")
+                    print(f"   Total Tokens: {token_usage} (${total_cost:.6f})")
                     
                     # Store in session
                     session.last_input_tokens = input_tokens
                     session.last_output_tokens = output_tokens
                     session.last_token_usage = token_usage
+                    session.last_input_cost = float(input_cost)
+                    session.last_output_cost = float(output_cost)
+                    session.last_total_cost = float(total_cost)
                     
                     # Update cumulative totals
                     session.total_input_tokens += input_tokens
                     session.total_output_tokens += output_tokens
+                    session.total_input_cost += float(input_cost)
+                    session.total_output_cost += float(output_cost)
+                    session.total_cost += float(total_cost)
                     
-                    # Update tokens in DB (non-blocking)
-                    await db_handler.update_session_tokens(
+                    # ✅ UPDATE TOKENS WITH COST IN DB
+                    await db_handler.update_session_tokens_with_cost(
                         session.session_id,
                         input_tokens,
                         output_tokens,
-                        token_usage
+                        token_usage,
+                        session.model_name
                     )
                     
                 except Exception as token_error:
-                    print(f"⚠️ Error extracting tokens: {token_error}")
+                    print(f"⚠️ Error extracting tokens/costs: {token_error}")
                     token_usage = 0
                     input_tokens = 0
                     output_tokens = 0
@@ -965,10 +1019,9 @@ async def chat(chat_msg: ChatMessage):
                     item.to_input_item() for item in result.new_items
                 ])
                 
-                # FIXED: Save user message with input tokens AFTER we have token counts
+                # Save user message with input tokens AND COST
                 if session.session_db_id:
-                    # Save user message with input tokens
-                    await db_handler.add_message(
+                    await db_handler.add_message_with_cost(
                         session.session_db_id,
                         "user",
                         chat_msg.message,
@@ -976,13 +1029,14 @@ async def chat(chat_msg: ChatMessage):
                         "text",
                         None,
                         None,
-                        input_tokens,  # User message gets input tokens
-                        0              # User message has 0 output tokens
+                        input_tokens,
+                        0,
+                        session.model_name
                     )
                     
-                    # Save assistant message with output tokens
+                    # Save assistant message with output tokens AND COST
                     formatted_response = format_markdown_to_html(response_text)
-                    await db_handler.add_message(
+                    await db_handler.add_message_with_cost(
                         session.session_db_id,
                         "assistant",
                         response_text,
@@ -990,8 +1044,9 @@ async def chat(chat_msg: ChatMessage):
                         "text",
                         None,
                         None,
-                        0,              # Assistant message has 0 input tokens
-                        output_tokens   # ✅ Assistant message gets output tokens
+                        0,
+                        output_tokens,
+                        session.model_name
                     )
                 
                 break
@@ -1179,20 +1234,21 @@ async def end_session(request: Request):
         # Mark session as ended in DB
         await db_handler.end_session(session.session_id, email_sent)
         
-        # Update user-brand interaction stats
+        # Update user-brand interaction stats WITH COST
         if session.user_id and session.brand_id:
-            await db_handler.update_user_brand_interaction(
+            await db_handler.update_user_brand_interaction_with_cost(
                 session.user_id,
                 session.brand_id,
                 len(session.conversation_history),
                 email_sent,
                 session.total_input_tokens,
-                session.total_output_tokens
+                session.total_output_tokens,
+                session.model_name
             )
         
-        # Update daily analytics
+        # Update daily analytics WITH COST
         if session.brand_id:
-            await db_handler.update_daily_analytics(session.brand_id)
+            await db_handler.update_daily_analytics_with_cost(session.brand_id)
         
         if email_sent:
             print(f"✅ Email sent successfully for session {session_id}")
@@ -1244,7 +1300,13 @@ async def get_session(session_id: str):
             "last_token_usage": db_session['last_token_usage'],
             "total_input_tokens": db_session['total_input_tokens'],
             "total_output_tokens": db_session['total_output_tokens'],
-            "total_tokens": db_session['total_tokens']
+            "total_tokens": db_session['total_tokens'],
+            "last_input_cost": session.last_input_cost,
+            "last_output_cost": session.last_output_cost,
+            "last_total_cost": session.last_total_cost,
+            "total_input_cost": session.total_input_cost,
+            "total_output_cost": session.total_output_cost,
+            "total_cost": session.total_cost
         })
     
     session = active_sessions[session_id]
@@ -1401,7 +1463,7 @@ async def logout(request: Request):
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request, session: dict = Depends(verify_session)):
-    """Render main dashboard"""
+    """Render main dashboard with cost tracking"""
     try:
         # Get all brands
         brands_query = """
@@ -1418,7 +1480,7 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                 await cursor.execute(brands_query)
                 brands = await cursor.fetchall()
                 
-                # Get overall stats
+                # Get overall stats WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT 
                         COUNT(DISTINCT s.id) as total_sessions,
@@ -1427,24 +1489,33 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                         SUM(s.email_sent) as total_emails,
                         AVG(s.duration_seconds) as avg_duration,
                         SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        MAX(s.total_cost) as max_cost,
+                        MIN(s.total_cost) as min_cost,
                         COUNT(DISTINCT DATE(s.started_at)) as active_days
                     FROM sessions s
                 """)
                 overall_stats = await cursor.fetchone()
                 
-                # Get today's stats
+                # Get today's stats WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT 
                         COUNT(DISTINCT id) as sessions_today,
                         COUNT(DISTINCT user_id) as users_today,
                         SUM(message_count) as messages_today,
-                        SUM(email_sent) as emails_today
+                        SUM(email_sent) as emails_today,
+                        SUM(total_cost) as cost_today,
+                        SUM(input_cost) as input_cost_today,
+                        SUM(output_cost) as output_cost_today
                     FROM sessions
                     WHERE DATE(started_at) = CURDATE()
                 """)
                 today_stats = await cursor.fetchone()
                 
-                # Get recent sessions
+                # Get recent sessions WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT 
                         s.session_id,
@@ -1453,6 +1524,10 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                         s.status,
                         s.email_sent,
                         s.total_tokens,
+                        s.model_name,
+                        s.input_cost,
+                        s.output_cost,
+                        s.total_cost,
                         b.brand_display_name,
                         u.email as user_email,
                         u.name as user_name
@@ -1464,7 +1539,7 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                 """)
                 recent_sessions = await cursor.fetchall()
                 
-                # Get top users
+                # Get top users WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT
                         u.id, 
@@ -1473,7 +1548,8 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                         u.total_conversations,
                         u.last_seen,
                         COUNT(DISTINCT s.id) as session_count,
-                        SUM(s.message_count) as total_messages
+                        SUM(s.message_count) as total_messages,
+                        SUM(s.total_cost) as total_cost
                     FROM users u
                     LEFT JOIN sessions s ON u.id = s.user_id
                     GROUP BY u.id
@@ -1481,7 +1557,8 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                     LIMIT 10
                 """)
                 top_users = await cursor.fetchall()
-                # Get all users
+                
+                # Get all users WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT
                         u.id, 
@@ -1490,7 +1567,10 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                         u.total_conversations,
                         u.last_seen,
                         COUNT(DISTINCT s.id) as session_count,
-                        SUM(s.message_count) as total_messages
+                        SUM(s.message_count) as total_messages,
+                        SUM(s.total_cost) as total_cost,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost
                     FROM users u
                     LEFT JOIN sessions s ON u.id = s.user_id
                     GROUP BY u.id
@@ -1498,14 +1578,16 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
                 """)
                 all_users = await cursor.fetchall()
 
-                # Get daily stats for last 7 days
+                # Get daily stats for last 7 days WITH COST - UPDATED
                 await cursor.execute("""
                     SELECT 
                         DATE(started_at) as date,
                         COUNT(DISTINCT id) as sessions,
                         COUNT(DISTINCT user_id) as users,
                         SUM(message_count) as messages,
-                        SUM(email_sent) as emails
+                        SUM(email_sent) as emails,
+                        SUM(total_cost) as total_cost,
+                        AVG(total_cost) as avg_cost
                     FROM sessions
                     WHERE started_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
                     GROUP BY DATE(started_at)
@@ -1522,7 +1604,7 @@ async def dashboard_page(request: Request, session: dict = Depends(verify_sessio
             "recent_sessions": recent_sessions,
             "top_users": top_users,
             "daily_stats": daily_stats,
-            "all_users" : all_users
+            "all_users": all_users
         })
     
     except Exception as e:
@@ -1592,17 +1674,22 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
     try:
         async with db_pool.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
-                # Get brand info
+                # Get brand info WITH COST - FIXED
                 await cursor.execute("""
-                    SELECT b.*,
-                           COUNT(DISTINCT s.id) as total_sessions,
-                           COUNT(DISTINCT s.user_id) as total_users,
-                           SUM(s.message_count) as total_messages,
-                           SUM(s.email_sent) as emails_sent,
-                           SUM(s.total_tokens) as total_tokens,
-                           SUM(s.total_input_tokens) as total_input_tokens,
-                           SUM(s.total_output_tokens) as total_output_tokens,
-                           AVG(s.duration_seconds) as avg_duration
+                    SELECT 
+                        b.*,
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.user_id) as total_users,
+                        COALESCE(SUM(s.message_count), 0) as total_messages,
+                        COALESCE(SUM(s.email_sent), 0) as emails_sent,
+                        COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(s.total_input_tokens), 0) as total_input_tokens,
+                        COALESCE(SUM(s.total_output_tokens), 0) as total_output_tokens,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost,
+                        COALESCE(SUM(s.input_cost), 0) as total_input_cost,
+                        COALESCE(SUM(s.output_cost), 0) as total_output_cost,
+                        COALESCE(AVG(s.total_cost), 0) as avg_cost_per_session,
+                        COALESCE(AVG(s.duration_seconds), 0) as avg_duration
                     FROM brands b
                     LEFT JOIN sessions s ON b.id = s.brand_id
                     WHERE b.id = %s
@@ -1613,14 +1700,20 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
                 if not brand:
                     raise HTTPException(status_code=404, detail="Brand not found")
                 
-                # Get brand users
+                # Get brand users WITH COST - FIXED
                 await cursor.execute("""
-                    SELECT u.*,
-                           COUNT(DISTINCT s.id) as session_count,
-                           SUM(s.message_count) as total_messages,
-                           SUM(s.total_tokens) as total_tokens,
-                           SUM(s.email_sent) as emails_received,
-                           MAX(s.last_activity) as last_activity
+                    SELECT 
+                        u.*,
+                        COUNT(DISTINCT s.id) as session_count,
+                        COALESCE(SUM(s.message_count), 0) as total_messages,
+                        COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(s.total_input_tokens), 0) as total_input_tokens,
+                        COALESCE(SUM(s.total_output_tokens), 0) as total_output_tokens,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost,
+                        COALESCE(SUM(s.input_cost), 0) as input_cost,
+                        COALESCE(SUM(s.output_cost), 0) as output_cost,
+                        COALESCE(SUM(s.email_sent), 0) as emails_received,
+                        MAX(s.last_activity) as last_activity
                     FROM users u
                     INNER JOIN sessions s ON u.id = s.user_id
                     WHERE s.brand_id = %s
@@ -1630,11 +1723,16 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
                 """, (brand_id,))
                 users = await cursor.fetchall()
                 
-                # Get recent sessions
+                # Get recent sessions - FIXED
                 await cursor.execute("""
-                    SELECT s.*,
-                           u.email as user_email,
-                           u.name as user_name
+                    SELECT 
+                        s.*,
+                        COALESCE(s.model_name, 'unknown') as model_name,
+                        COALESCE(s.input_cost, 0) as input_cost,
+                        COALESCE(s.output_cost, 0) as output_cost,
+                        COALESCE(s.total_cost, 0) as total_cost,
+                        u.email as user_email,
+                        u.name as user_name
                     FROM sessions s
                     LEFT JOIN users u ON s.user_id = u.id
                     WHERE s.brand_id = %s
@@ -1643,14 +1741,18 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
                 """, (brand_id,))
                 recent_sessions = await cursor.fetchall()
                 
-                # Get daily stats (last 30 days)
+                # Get daily stats (last 30 days) - FIXED
                 await cursor.execute("""
-                    SELECT DATE(started_at) as date,
-                           COUNT(DISTINCT id) as sessions,
-                           COUNT(DISTINCT user_id) as users,
-                           SUM(message_count) as messages,
-                           SUM(email_sent) as emails,
-                           SUM(total_tokens) as tokens
+                    SELECT 
+                        DATE(started_at) as date,
+                        COUNT(DISTINCT id) as sessions,
+                        COUNT(DISTINCT user_id) as users,
+                        COALESCE(SUM(message_count), 0) as messages,
+                        COALESCE(SUM(email_sent), 0) as emails,
+                        COALESCE(SUM(total_tokens), 0) as tokens,
+                        COALESCE(SUM(total_cost), 0) as total_cost,
+                        COALESCE(SUM(input_cost), 0) as input_cost,
+                        COALESCE(SUM(output_cost), 0) as output_cost
                     FROM sessions
                     WHERE brand_id = %s
                     AND started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
@@ -1659,16 +1761,19 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
                 """, (brand_id,))
                 daily_stats = await cursor.fetchall()
                 
-                # Get top users by activity
+                # Get top users by activity - FIXED
                 await cursor.execute("""
-                    SELECT u.email, u.name,
-                           COUNT(DISTINCT s.id) as session_count,
-                           SUM(s.message_count) as message_count,
-                           SUM(s.total_tokens) as token_count
+                    SELECT 
+                        u.email, 
+                        u.name,
+                        COUNT(DISTINCT s.id) as session_count,
+                        COALESCE(SUM(s.message_count), 0) as message_count,
+                        COALESCE(SUM(s.total_tokens), 0) as token_count,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost
                     FROM users u
                     INNER JOIN sessions s ON u.id = s.user_id
                     WHERE s.brand_id = %s
-                    GROUP BY u.id
+                    GROUP BY u.id, u.email, u.name
                     ORDER BY session_count DESC
                     LIMIT 10
                 """, (brand_id,))
@@ -1681,6 +1786,15 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
                     ORDER BY is_active DESC, email ASC
                 """, (brand_id,))
                 recipients = await cursor.fetchall()
+
+        # Create breadcrumbs with brand's name
+        brand_name = brand.get('brand_display_name') or brand.get('brand_key') or f'Brand {brand_id}'
+        
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Active Brands", "url": "/admin/dashboard#brands", "active": False},
+            {"label": brand_name, "url": None, "active": True}
+        ]
         
         return templates.TemplateResponse("brand_detail.html", {
             "request": request,
@@ -1690,7 +1804,8 @@ async def brand_detail_page(request: Request, brand_id: int, session: dict = Dep
             "recent_sessions": recent_sessions,
             "daily_stats": daily_stats,
             "top_users": top_users,
-            "recipients": recipients
+            "recipients": recipients,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
@@ -1706,16 +1821,21 @@ async def user_detail_page(request: Request, user_id: int, session: dict = Depen
     try:
         async with db_pool.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
-                # Get user info
+                # Get user info WITH COST - FIXED
                 await cursor.execute("""
-                    SELECT u.*,
-                           COUNT(DISTINCT s.id) as total_sessions,
-                           SUM(s.message_count) as total_messages,
-                           SUM(s.total_tokens) as total_tokens,
-                           SUM(s.total_input_tokens) as total_input_tokens,
-                           SUM(s.total_output_tokens) as total_output_tokens,
-                           SUM(s.email_sent) as emails_received,
-                           AVG(s.duration_seconds) as avg_session_duration
+                    SELECT 
+                        u.*,
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COALESCE(SUM(s.message_count), 0) as total_messages,
+                        COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(s.total_input_tokens), 0) as total_input_tokens,
+                        COALESCE(SUM(s.total_output_tokens), 0) as total_output_tokens,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost,
+                        COALESCE(SUM(s.input_cost), 0) as total_input_cost,
+                        COALESCE(SUM(s.output_cost), 0) as total_output_cost,
+                        COALESCE(AVG(s.total_cost), 0) as avg_cost_per_session,
+                        COALESCE(SUM(s.email_sent), 0) as emails_received,
+                        COALESCE(AVG(s.duration_seconds), 0) as avg_session_duration
                     FROM users u
                     LEFT JOIN sessions s ON u.id = s.user_id
                     WHERE u.id = %s
@@ -1726,11 +1846,16 @@ async def user_detail_page(request: Request, user_id: int, session: dict = Depen
                 if not user:
                     raise HTTPException(status_code=404, detail="User not found")
                 
-                # Get user sessions
+                # Get user sessions - FIXED
                 await cursor.execute("""
-                    SELECT s.*,
-                           b.brand_display_name,
-                           b.brand_key
+                    SELECT 
+                        s.*,
+                        b.brand_display_name,
+                        b.brand_key,
+                        COALESCE(s.model_name, 'unknown') as model_name,
+                        COALESCE(s.input_cost, 0) as input_cost,
+                        COALESCE(s.output_cost, 0) as output_cost,
+                        COALESCE(s.total_cost, 0) as total_cost
                     FROM sessions s
                     LEFT JOIN brands b ON s.brand_id = b.id
                     WHERE s.user_id = %s
@@ -1765,12 +1890,16 @@ async def user_detail_page(request: Request, user_id: int, session: dict = Depen
                 """, (user_id,))
                 brand_interactions = await cursor.fetchall()
                 
-                # Get activity timeline (last 30 days)
+                # Get activity timeline (last 30 days) - FIXED WITH COALESCE
                 await cursor.execute("""
-                    SELECT DATE(started_at) as date,
-                           COUNT(*) as session_count,
-                           SUM(message_count) as message_count,
-                           SUM(total_tokens) as token_count
+                    SELECT 
+                        DATE(started_at) as date,
+                        COUNT(*) as session_count,
+                        COALESCE(SUM(message_count), 0) as message_count,
+                        COALESCE(SUM(total_tokens), 0) as token_count,
+                        COALESCE(SUM(total_cost), 0) as total_cost,
+                        COALESCE(SUM(input_cost), 0) as input_cost,
+                        COALESCE(SUM(output_cost), 0) as output_cost
                     FROM sessions
                     WHERE user_id = %s
                     AND started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
@@ -1779,6 +1908,15 @@ async def user_detail_page(request: Request, user_id: int, session: dict = Depen
                 """, (user_id,))
                 activity_timeline = await cursor.fetchall()
         
+        # Create breadcrumbs with user's name
+        user_name = user.get('name') or user.get('email') or f'User {user_id}'
+        
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "All Users", "url": "/admin/dashboard#users", "active": False},
+            {"label": user_name, "url": None, "active": True}
+        ]
+        
         return templates.TemplateResponse("user_detail.html", {
             "request": request,
             "username": session["username"],
@@ -1786,7 +1924,8 @@ async def user_detail_page(request: Request, user_id: int, session: dict = Depen
             "sessions": sessions,
             "emails": emails,
             "brand_interactions": brand_interactions,
-            "activity_timeline": activity_timeline
+            "activity_timeline": activity_timeline,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
@@ -1830,11 +1969,19 @@ async def emails_page(request: Request, session: dict = Depends(verify_session))
                 """)
                 stats = await cursor.fetchone()
         
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Email Statistics", "url": "/admin/dashboard#emails", "active": False},
+            {"label": "Email Log", "url": None, "active": True}
+        ]
+        
         return templates.TemplateResponse("emails_list.html", {
             "request": request,
             "username": session["username"],
             "emails": emails,
-            "stats": stats
+            "stats": stats,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
@@ -1868,10 +2015,19 @@ async def email_detail_page(request: Request, email_id: int, session: dict = Dep
                 if not email:
                     raise HTTPException(status_code=404, detail="Email not found")
         
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Email Statistics", "url": "/admin/dashboard#emails", "active": False},
+            {"label": "Email Logs", "url": "/admin/emails", "active": False},
+            {"label": "Conversation Detail", "url": None, "active": True}
+        ]
+        
         return templates.TemplateResponse("email_detail.html", {
             "request": request,
             "username": session["username"],
-            "email": email
+            "email": email,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
@@ -1886,43 +2042,57 @@ async def tokens_page(request: Request, session: dict = Depends(verify_session))
     try:
         async with db_pool.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
-                # Overall token stats
+                # Overall token stats WITH COST
                 await cursor.execute("""
                     SELECT 
-                        SUM(total_tokens) as total_tokens,
-                        SUM(total_input_tokens) as total_input_tokens,
-                        SUM(total_output_tokens) as total_output_tokens,
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(total_input_tokens), 0) as total_input_tokens,
+                        COALESCE(SUM(total_output_tokens), 0) as total_output_tokens,
+                        COALESCE(SUM(total_cost), 0) as total_cost,
+                        COALESCE(SUM(input_cost), 0) as total_input_cost,
+                        COALESCE(SUM(output_cost), 0) as total_output_cost,
                         COUNT(*) as total_sessions,
-                        AVG(total_tokens) as avg_per_session
+                        COALESCE(AVG(total_tokens), 0) as avg_per_session,
+                        COALESCE(AVG(total_cost), 0) as avg_cost_per_session
                     FROM sessions
                 """)
                 overall_stats = await cursor.fetchone()
                 
-                # Token usage by brand - ADD b.id here
+                # Token usage by brand - FIXED with COALESCE
                 await cursor.execute("""
-                    SELECT b.id,
-                           b.brand_display_name,
-                           b.brand_key,
-                           COUNT(s.id) as session_count,
-                           SUM(s.total_tokens) as total_tokens,
-                           SUM(s.total_input_tokens) as input_tokens,
-                           SUM(s.total_output_tokens) as output_tokens,
-                           AVG(s.total_tokens) as avg_tokens
+                    SELECT 
+                        b.id,
+                        b.brand_display_name,
+                        b.brand_key,
+                        COUNT(s.id) as session_count,
+                        COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(s.total_input_tokens), 0) as input_tokens,
+                        COALESCE(SUM(s.total_output_tokens), 0) as output_tokens,
+                        COALESCE(AVG(s.total_tokens), 0) as avg_tokens,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost,
+                        COALESCE(SUM(s.input_cost), 0) as input_cost,
+                        COALESCE(SUM(s.output_cost), 0) as output_cost,
+                        COALESCE(AVG(s.total_cost), 0) as avg_cost
                     FROM brands b
                     LEFT JOIN sessions s ON b.id = s.brand_id
-                    GROUP BY b.id
+                    GROUP BY b.id, b.brand_display_name, b.brand_key
                     ORDER BY total_tokens DESC
                 """)
                 brand_tokens = await cursor.fetchall()
                 
-                # Daily token usage (last 30 days)
+                # Daily token usage (last 30 days) - FIXED
                 await cursor.execute("""
-                    SELECT DATE(started_at) as date,
-                           COUNT(*) as sessions,
-                           SUM(total_tokens) as total_tokens,
-                           SUM(total_input_tokens) as input_tokens,
-                           SUM(total_output_tokens) as output_tokens,
-                           AVG(total_tokens) as avg_tokens
+                    SELECT 
+                        DATE(started_at) as date,
+                        COUNT(*) as sessions,
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(total_input_tokens), 0) as input_tokens,
+                        COALESCE(SUM(total_output_tokens), 0) as output_tokens,
+                        COALESCE(AVG(total_tokens), 0) as avg_tokens,
+                        COALESCE(SUM(total_cost), 0) as total_cost,
+                        COALESCE(SUM(input_cost), 0) as input_cost,
+                        COALESCE(SUM(output_cost), 0) as output_cost,
+                        COALESCE(AVG(total_cost), 0) as avg_cost
                     FROM sessions
                     WHERE started_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
                     GROUP BY DATE(started_at)
@@ -1930,16 +2100,21 @@ async def tokens_page(request: Request, session: dict = Depends(verify_session))
                 """)
                 daily_tokens = await cursor.fetchall()
                 
-                # Top sessions by token usage
+                # Top sessions by token usage - FIXED
                 await cursor.execute("""
-                    SELECT s.session_id,
-                           s.started_at,
-                           s.total_tokens,
-                           s.total_input_tokens,
-                           s.total_output_tokens,
-                           s.message_count,
-                           b.brand_display_name,
-                           u.email as user_email
+                    SELECT 
+                        s.session_id,
+                        s.started_at,
+                        COALESCE(s.total_tokens, 0) as total_tokens,
+                        COALESCE(s.total_input_tokens, 0) as total_input_tokens,
+                        COALESCE(s.total_output_tokens, 0) as total_output_tokens,
+                        s.message_count,
+                        COALESCE(s.model_name, 'unknown') as model_name,
+                        COALESCE(s.input_cost, 0) as input_cost,
+                        COALESCE(s.output_cost, 0) as output_cost,
+                        COALESCE(s.total_cost, 0) as total_cost,
+                        b.brand_display_name,
+                        u.email as user_email
                     FROM sessions s
                     LEFT JOIN brands b ON s.brand_id = b.id
                     LEFT JOIN users u ON s.user_id = u.id
@@ -1948,21 +2123,33 @@ async def tokens_page(request: Request, session: dict = Depends(verify_session))
                 """)
                 top_sessions = await cursor.fetchall()
                 
-                # Top users by token usage - ADD u.id here
+                # Top users by token usage - FIXED
                 await cursor.execute("""
-                    SELECT u.id,
-                           u.email,
-                           u.name,
-                           COUNT(s.id) as session_count,
-                           SUM(s.total_tokens) as total_tokens,
-                           AVG(s.total_tokens) as avg_tokens
+                    SELECT 
+                        u.id,
+                        u.email,
+                        u.name,
+                        COUNT(s.id) as session_count,
+                        COALESCE(SUM(s.total_tokens), 0) as total_tokens,
+                        COALESCE(AVG(s.total_tokens), 0) as avg_tokens,
+                        COALESCE(SUM(s.total_cost), 0) as total_cost,
+                        COALESCE(SUM(s.input_cost), 0) as input_cost,
+                        COALESCE(SUM(s.output_cost), 0) as output_cost,
+                        COALESCE(AVG(s.total_cost), 0) as avg_cost
                     FROM users u
                     LEFT JOIN sessions s ON u.id = s.user_id
-                    GROUP BY u.id
+                    GROUP BY u.id, u.email, u.name
                     ORDER BY total_tokens DESC
                     LIMIT 20
                 """)
                 top_users = await cursor.fetchall()
+        
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Total Tokens", "url": "/admin/dashboard#tokens", "active": False},
+            {"label": "Token Analytics", "url": None, "active": True}
+        ]
         
         return templates.TemplateResponse("tokens_detail.html", {
             "request": request,
@@ -1971,12 +2158,14 @@ async def tokens_page(request: Request, session: dict = Depends(verify_session))
             "brand_tokens": brand_tokens,
             "daily_tokens": daily_tokens,
             "top_sessions": top_sessions,
-            "top_users": top_users
+            "top_users": top_users,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
         logger.error(f"Tokens page error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/admin/recipients", response_class=HTMLResponse)
 async def recipients_page(request: Request, session: dict = Depends(verify_session)):
@@ -2023,13 +2212,19 @@ async def recipients_page(request: Request, session: dict = Depends(verify_sessi
                     FROM brand_recipients
                 """)
                 stats = await cursor.fetchone()
-        
+
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Recipients Management", "url": None, "active": True}
+        ]
         return templates.TemplateResponse("recipients_list.html", {
             "request": request,
             "username": session["username"],
             "brands": brands,
             "recipients_by_brand": recipients_by_brand,
-            "stats": stats
+            "stats": stats,
+            "breadcrumbs": breadcrumbs
         })
     
     except Exception as e:
@@ -2160,6 +2355,239 @@ async def toggle_recipient_status(recipient_id: int, session: dict = Depends(ver
         logger.error(f"Toggle recipient status error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     
+@app.get("/admin/costs", response_class=HTMLResponse)
+async def costs_dashboard(request: Request, session: dict = Depends(verify_session)):
+    """Comprehensive cost analytics dashboard"""
+    try:
+        days = int(request.query_params.get('days', 30))
+        brand_id = request.query_params.get('brand_id')
+        
+        # Get all cost data
+        cost_overview = await db_handler.get_cost_overview(days) or {}
+        cost_by_brand = await db_handler.get_cost_by_brand(days) or []
+        cost_by_model = await db_handler.get_cost_by_model(brand_id, days) or []
+        daily_trend = await db_handler.get_daily_cost_trend(brand_id, days) or []
+        top_sessions = await db_handler.get_top_cost_sessions(20, brand_id) or []
+        efficiency_metrics = await db_handler.get_cost_efficiency_metrics(brand_id, days) or {}
+        hourly_pattern = await db_handler.get_hourly_cost_pattern(brand_id, 7) or []
+        
+        # Debug logging
+        logger.info(f"Daily trend data count: {len(daily_trend) if daily_trend else 0}")
+        
+        # Get all brands for filter
+        async with db_pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT id, brand_key, brand_display_name 
+                    FROM brands 
+                    WHERE is_active = TRUE 
+                    ORDER BY brand_display_name
+                """)
+                brands = await cursor.fetchall()
+
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Total Costs", "url": "/admin/dashboard#costs", "active": False},
+            {"label": "Cost Analytics Dashboard", "url": None, "active": True}
+        ]
+        
+        return templates.TemplateResponse("costs_dashboard.html", {
+            "request": request,
+            "username": session["username"],
+            "days": days,
+            "selected_brand_id": brand_id,
+            "brands": brands,
+            "cost_overview": cost_overview,
+            "cost_by_brand": cost_by_brand,
+            "cost_by_model": cost_by_model,
+            "daily_trend": daily_trend,
+            "top_sessions": top_sessions,
+            "efficiency_metrics": efficiency_metrics,
+            "hourly_pattern": hourly_pattern,
+            "breadcrumbs": breadcrumbs
+        })
+    
+    except Exception as e:
+        logger.error(f"Cost dashboard error: {e}", exc_info=True)
+        # Create breadcrumbs
+        breadcrumbs = [
+            {"label": "Home", "url": "/admin/dashboard", "active": False},
+            {"label": "Total Costs", "url": "/admin/dashboard#costs", "active": False},
+            {"label": "Cost Analytics Dashboard", "url": None, "active": True}
+        ]
+        return templates.TemplateResponse(
+            "costs_dashboard.html",
+            {
+                "request": request, 
+                "username": session.get("username", "Admin"),
+                "error": str(e),
+                "days": 30,
+                "brands": [],
+                "cost_overview": {},
+                "daily_trend": [],
+                "breadcrumbs": breadcrumbs
+            }
+        )
+
+@app.get("/admin/costs/export")
+async def export_costs(
+    request: Request, 
+    session: dict = Depends(verify_session),
+    brand_id: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """Export cost report as CSV"""
+    try:
+        import csv
+        from io import StringIO
+        from fastapi.responses import StreamingResponse
+        
+        data = await db_handler.export_cost_report(brand_id, start_date, end_date)
+        
+        # Create CSV
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=data[0].keys() if data else [])
+        writer.writeheader()
+        writer.writerows(data)
+        
+        output.seek(0)
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=cost_report_{datetime.now().strftime('%Y%m%d')}.csv"
+            }
+        )
+    
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        return {"error": str(e)}
+
+@app.get("/admin/user/{user_id}/costs", response_class=HTMLResponse)
+async def user_cost_details(
+    user_id: int,
+    request: Request,
+    session: dict = Depends(verify_session)
+):
+    """User-specific cost breakdown"""
+    try:
+        user_cost_data = await db_handler.get_user_cost_breakdown(user_id)
+        # Create custom breadcrumbs with meaningful labels
+        user_name = user_cost_data.get('summary', {}).get('name') or \
+                    user_cost_data.get('summary', {}).get('email', f'User {user_id}')
+        
+        breadcrumbs = [
+            {"label": "Home", "url": "/dashboard", "active": False},
+            {"label": "Costs", "url": "/admin/costs", "active": False},
+            {"label": f"{user_name}", "url": None, "active": True}
+        ]
+        
+        return templates.TemplateResponse("user_cost_details.html", {
+            "request": request,
+            "username": session["username"],
+            "user_data": user_cost_data,
+            "breadcrumbs": breadcrumbs
+        })
+    
+    except Exception as e:
+        logger.error(f"User cost details error: {e}")
+        return templates.TemplateResponse(
+            "user_cost_details.html",
+            {"request": request, "error": str(e)}
+        )
+
+@app.get("/admin/api/costs/chart-data")
+async def cost_chart_data(
+    days: int = 30,
+    brand_id: Optional[int] = None,
+    session: dict = Depends(verify_session)
+):
+    """API endpoint for cost chart data"""
+    try:
+        daily_trend = await db_handler.get_daily_cost_trend(brand_id, days)
+        
+        return {
+            "labels": [str(row['date']) for row in daily_trend],
+            "datasets": [
+                {
+                    "label": "Total Cost",
+                    "data": [float(row['total_cost']) for row in daily_trend],
+                    "backgroundColor": "rgba(59, 130, 246, 0.5)",
+                    "borderColor": "rgb(59, 130, 246)",
+                    "borderWidth": 2
+                },
+                {
+                    "label": "Input Cost",
+                    "data": [float(row['input_cost']) for row in daily_trend],
+                    "backgroundColor": "rgba(16, 185, 129, 0.5)",
+                    "borderColor": "rgb(16, 185, 129)",
+                    "borderWidth": 2
+                },
+                {
+                    "label": "Output Cost",
+                    "data": [float(row['output_cost']) for row in daily_trend],
+                    "backgroundColor": "rgba(245, 158, 11, 0.5)",
+                    "borderColor": "rgb(245, 158, 11)",
+                    "borderWidth": 2
+                }
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Chart data error: {e}")
+        return {"error": str(e)}
+    
+def get_breadcrumbs(request: Request, custom_items: list = None):
+    """
+    Generate breadcrumbs based on URL path or custom items
+    
+    Args:
+        request: FastAPI Request object
+        custom_items: Optional list of dicts with 'label' and 'url' keys
+    
+    Returns:
+        List of breadcrumb items
+    """
+    if custom_items:
+        return custom_items
+    
+    breadcrumbs = [{"label": "Home", "url": "/admin", "active": False}]
+    
+    path = request.url.path
+    path_parts = [p for p in path.split('/') if p]
+    
+    # Build breadcrumbs from URL
+    current_path = ""
+    for i, part in enumerate(path_parts):
+        current_path += f"/{part}"
+        
+        # Skip 'admin' as it's already in Home
+        if part == 'admin':
+            continue
+            
+        # Format the label (capitalize, replace hyphens/underscores)
+        label = part.replace('-', ' ').replace('_', ' ').title()
+        
+        # Check if it's a number (likely an ID)
+        if part.isdigit():
+            # Try to get a more meaningful label from the next part
+            if i + 1 < len(path_parts):
+                label = f"{path_parts[i + 1].title()} #{part}"
+            else:
+                label = f"ID: {part}"
+        
+        is_active = (i == len(path_parts) - 1)
+        
+        breadcrumbs.append({
+            "label": label,
+            "url": current_path if not is_active else None,
+            "active": is_active
+        })
+    
+    return breadcrumbs
+
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Handle HTTP exceptions with custom pages"""

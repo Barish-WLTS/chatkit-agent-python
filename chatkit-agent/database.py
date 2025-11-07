@@ -11,6 +11,8 @@ import aiomysql
 import os
 from contextlib import asynccontextmanager
 import logging
+from decimal import Decimal
+from typing import Dict, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ class DatabasePool:
         if not self.pool:
             await self.create_pool()
         
+        # ✅ FIX: Use acquire() not get_connection()
         async with self.pool.acquire() as conn:
             yield conn
 
@@ -531,7 +534,719 @@ class DatabaseHandler:
                 """, params)
                 
                 return await cursor.fetchone()
+            
+# ==================== COST TRACKING METHODS ====================
+    
+    async def get_model_pricing(self, model_name: str) -> Optional[Dict]:
+        """Get pricing information for a specific model"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        model_name,
+                        input_price_per_million,
+                        cached_input_price_per_million,
+                        output_price_per_million,
+                        is_active
+                    FROM models
+                    WHERE model_name = %s AND is_active = TRUE
+                """, (model_name,))
+                return await cursor.fetchone()
+    
+    async def calculate_token_cost(
+        self, 
+        input_tokens: int, 
+        output_tokens: int, 
+        model_name: str = 'gpt-4.1-nano',
+        use_cached: bool = False
+    ) -> Tuple[Decimal, Decimal, Decimal]:
+        """
+        Calculate cost based on token usage
+        Returns: (input_cost, output_cost, total_cost)
+        """
+        pricing = await self.get_model_pricing(model_name)
+        
+        if not pricing:
+            print(f"⚠️ Model {model_name} not found in pricing table, using default")
+            # Fallback to gpt-4.1-nano if model not found
+            pricing = await self.get_model_pricing('gpt-4.1-nano')
+            if not pricing:
+                return (Decimal('0'), Decimal('0'), Decimal('0'))
+        
+        # Get appropriate input price (cached or regular)
+        if use_cached:
+            input_price = Decimal(str(pricing['cached_input_price_per_million']))
+        else:
+            input_price = Decimal(str(pricing['input_price_per_million']))
+        
+        output_price = Decimal(str(pricing['output_price_per_million']))
+        
+        # Calculate costs: (tokens / 1,000,000) * price_per_million
+        input_cost = (Decimal(str(input_tokens)) / Decimal('1000000')) * input_price
+        output_cost = (Decimal(str(output_tokens)) / Decimal('1000000')) * output_price
+        total_cost = input_cost + output_cost
+        
+        # Round to 6 decimal places
+        input_cost = input_cost.quantize(Decimal('0.000001'))
+        output_cost = output_cost.quantize(Decimal('0.000001'))
+        total_cost = total_cost.quantize(Decimal('0.000001'))
+        
+        return (input_cost, output_cost, total_cost)
+    
+    async def create_session_with_model(
+        self,
+        session_id: str,
+        brand_id: int,
+        model_name: str = 'gpt-4.1-nano'
+    ) -> int:
+        """Create a new session with model tracking"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    INSERT INTO sessions (
+                        session_id, brand_id, status, model_name,
+                        started_at, last_activity
+                    ) VALUES (%s, %s, 'active', %s, NOW(), NOW())
+                """, (session_id, brand_id, model_name))
+                await conn.commit()
+                return cursor.lastrowid
+    
+    async def update_session_tokens_with_cost(
+        self,
+        session_id: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        model_name: str = 'gpt-4.1-nano'
+    ):
+        """Update session with token usage and calculate costs"""
+        # Calculate costs
+        input_cost, output_cost, total_cost = await self.calculate_token_cost(
+            input_tokens, 
+            output_tokens, 
+            model_name
+        )
+        
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    UPDATE sessions
+                    SET 
+                        last_input_tokens = %s,
+                        last_output_tokens = %s,
+                        last_token_usage = %s,
+                        total_input_tokens = total_input_tokens + %s,
+                        total_output_tokens = total_output_tokens + %s,
+                        total_tokens = total_tokens + %s,
+                        input_cost = input_cost + %s,
+                        output_cost = output_cost + %s,
+                        total_cost = total_cost + %s,
+                        model_name = %s,
+                        last_activity = NOW()
+                    WHERE session_id = %s
+                """, (
+                    input_tokens, output_tokens, total_tokens,
+                    input_tokens, output_tokens, total_tokens,
+                    float(input_cost), float(output_cost), float(total_cost),
+                    model_name, session_id
+                ))
+                await conn.commit()
+        
+        print(f"💰 Cost updated - Input: ${input_cost:.6f}, Output: ${output_cost:.6f}, Total: ${total_cost:.6f}")
+        
+        return {
+            'input_cost': float(input_cost),
+            'output_cost': float(output_cost),
+            'total_cost': float(total_cost)
+        }
+    
+    async def add_message_with_cost(
+        self,
+        session_id: int,
+        role: str,
+        content: str,
+        formatted_content: str = None,
+        content_type: str = "text",
+        file_name: str = None,
+        file_size: int = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        model_name: str = 'gpt-4.1-nano'
+    ):
+        """Add message with cost calculation"""
+        # Calculate costs
+        input_cost, output_cost, total_cost = await self.calculate_token_cost(
+            input_tokens,
+            output_tokens,
+            model_name
+        )
+        
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                # Get current message count
+                await cursor.execute("""
+                    SELECT COALESCE(MAX(message_order), 0) + 1 as next_order
+                    FROM messages WHERE session_id = %s
+                """, (session_id,))
+                result = await cursor.fetchone()
+                message_order = result[0] if result else 1
+                
+                # Insert message
+                await cursor.execute("""
+                    INSERT INTO messages (
+                        session_id, role, content, formatted_content,
+                        content_type, file_name, file_size,
+                        input_tokens, output_tokens, total_tokens,
+                        input_cost, output_cost, total_cost,
+                        message_order
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                """, (
+                    session_id, role, content, formatted_content,
+                    content_type, file_name, file_size,
+                    input_tokens, output_tokens, input_tokens + output_tokens,
+                    float(input_cost), float(output_cost), float(total_cost),
+                    message_order
+                ))
+                
+                # Update session message counts
+                if role == "user":
+                    await cursor.execute("""
+                        UPDATE sessions
+                        SET message_count = message_count + 1,
+                            user_message_count = user_message_count + 1
+                        WHERE id = %s
+                    """, (session_id,))
+                elif role == "assistant":
+                    await cursor.execute("""
+                        UPDATE sessions
+                        SET message_count = message_count + 1,
+                            assistant_message_count = assistant_message_count + 1
+                        WHERE id = %s
+                    """, (session_id,))
+                
+                await conn.commit()
+    
+    async def get_session_cost_summary(self, session_id: str) -> Dict:
+        """Get cost summary for a session"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        s.session_id,
+                        s.model_name,
+                        s.total_input_tokens,
+                        s.total_output_tokens,
+                        s.total_tokens,
+                        s.input_cost,
+                        s.output_cost,
+                        s.total_cost,
+                        s.message_count,
+                        b.brand_display_name
+                    FROM sessions s
+                    JOIN brands b ON s.brand_id = b.id
+                    WHERE s.session_id = %s
+                """, (session_id,))
+                return await cursor.fetchone()
+    
+    async def get_brand_cost_summary(self, brand_id: int, days: int = 30) -> Dict:
+        """Get cost summary for a brand over specified days"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.user_id) as unique_users,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        MAX(s.total_cost) as max_cost_session,
+                        MIN(s.total_cost) as min_cost_session
+                    FROM sessions s
+                    WHERE s.brand_id = %s
+                    AND s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                """, (brand_id, days))
+                return await cursor.fetchone()
+    
+    async def get_daily_cost_breakdown(self, brand_id: int, days: int = 30):
+        """Get daily cost breakdown for a brand"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        DATE(s.started_at) as date,
+                        s.model_name,
+                        COUNT(s.id) as session_count,
+                        SUM(s.total_input_tokens) as input_tokens,
+                        SUM(s.total_output_tokens) as output_tokens,
+                        SUM(s.input_cost) as input_cost,
+                        SUM(s.output_cost) as output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost
+                    FROM sessions s
+                    WHERE s.brand_id = %s
+                    AND s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    GROUP BY DATE(s.started_at), s.model_name
+                    ORDER BY date DESC, total_cost DESC
+                """, (brand_id, days))
+                return await cursor.fetchall()
+    
+    async def get_user_cost_summary(self, user_id: int) -> Dict:
+        """Get total cost summary for a user across all brands"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        u.email,
+                        u.name,
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.brand_id) as brands_used,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        MAX(s.started_at) as last_session
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    WHERE u.id = %s
+                    GROUP BY u.id, u.email, u.name
+                """, (user_id,))
+                return await cursor.fetchone()
+    
+    async def update_user_brand_interaction_with_cost(
+        self,
+        user_id: int,
+        brand_id: int,
+        message_count: int,
+        email_sent: bool,
+        input_tokens: int,
+        output_tokens: int,
+        model_name: str = 'gpt-4.1-nano'
+    ):
+        """Update user-brand interaction stats with cost tracking"""
+        # Calculate costs
+        input_cost, output_cost, total_cost = await self.calculate_token_cost(
+            input_tokens,
+            output_tokens,
+            model_name
+        )
+        
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    INSERT INTO user_brand_interactions (
+                        user_id, brand_id, total_sessions, total_messages,
+                        total_emails_sent, total_input_tokens, total_output_tokens,
+                        total_tokens, total_input_cost, total_output_cost, total_cost,
+                        last_interaction
+                    ) VALUES (
+                        %s, %s, 1, %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        total_sessions = total_sessions + 1,
+                        total_messages = total_messages + %s,
+                        total_emails_sent = total_emails_sent + %s,
+                        total_input_tokens = total_input_tokens + %s,
+                        total_output_tokens = total_output_tokens + %s,
+                        total_tokens = total_tokens + %s,
+                        total_input_cost = total_input_cost + %s,
+                        total_output_cost = total_output_cost + %s,
+                        total_cost = total_cost + %s,
+                        last_interaction = NOW()
+                """, (
+                    user_id, brand_id, message_count, 1 if email_sent else 0,
+                    input_tokens, output_tokens, input_tokens + output_tokens,
+                    float(input_cost), float(output_cost), float(total_cost),
+                    message_count, 1 if email_sent else 0,
+                    input_tokens, output_tokens, input_tokens + output_tokens,
+                    float(input_cost), float(output_cost), float(total_cost)
+                ))
+                await conn.commit()
+    
+    async def update_daily_analytics_with_cost(self, brand_id: int):
+        """Update daily analytics with cost tracking"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute("""
+                    INSERT INTO analytics_summary (
+                        brand_id, date, total_sessions, total_messages,
+                        total_users, new_users, emails_sent,
+                        avg_session_duration, avg_messages_per_session,
+                        total_input_tokens, total_output_tokens, total_tokens,
+                        total_input_cost, total_output_cost, total_cost,
+                        avg_cost_per_session
+                    )
+                    SELECT 
+                        %s,
+                        CURDATE(),
+                        COUNT(DISTINCT s.id),
+                        COALESCE(SUM(s.message_count), 0),
+                        COUNT(DISTINCT s.user_id),
+                        COUNT(DISTINCT CASE 
+                            WHEN u.first_seen >= CURDATE() THEN s.user_id 
+                        END),
+                        SUM(CASE WHEN s.email_sent THEN 1 ELSE 0 END),
+                        AVG(s.duration_seconds),
+                        AVG(s.message_count),
+                        COALESCE(SUM(s.total_input_tokens), 0),
+                        COALESCE(SUM(s.total_output_tokens), 0),
+                        COALESCE(SUM(s.total_tokens), 0),
+                        COALESCE(SUM(s.input_cost), 0),
+                        COALESCE(SUM(s.output_cost), 0),
+                        COALESCE(SUM(s.total_cost), 0),
+                        COALESCE(AVG(s.total_cost), 0)
+                    FROM sessions s
+                    LEFT JOIN users u ON s.user_id = u.id
+                    WHERE s.brand_id = %s
+                    AND DATE(s.started_at) = CURDATE()
+                    ON DUPLICATE KEY UPDATE
+                        total_sessions = VALUES(total_sessions),
+                        total_messages = VALUES(total_messages),
+                        total_users = VALUES(total_users),
+                        new_users = VALUES(new_users),
+                        emails_sent = VALUES(emails_sent),
+                        avg_session_duration = VALUES(avg_session_duration),
+                        avg_messages_per_session = VALUES(avg_messages_per_session),
+                        total_input_tokens = VALUES(total_input_tokens),
+                        total_output_tokens = VALUES(total_output_tokens),
+                        total_tokens = VALUES(total_tokens),
+                        total_input_cost = VALUES(total_input_cost),
+                        total_output_cost = VALUES(total_output_cost),
+                        total_cost = VALUES(total_cost),
+                        avg_cost_per_session = VALUES(avg_cost_per_session)
+                """, (brand_id, brand_id))
+                await conn.commit()
 
+    # ==================== ENHANCED COST TRACKING METHODS ====================
 
+    async def get_cost_overview(self, days: int = 30) -> Dict:
+        """Get comprehensive cost overview"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.brand_id) as brands_used,
+                        COUNT(DISTINCT s.user_id) as unique_users,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        MAX(s.total_cost) as max_session_cost,
+                        MIN(s.total_cost) as min_session_cost,
+                        SUM(CASE WHEN DATE(s.started_at) = CURDATE() THEN s.total_cost ELSE 0 END) as cost_today,
+                        SUM(CASE WHEN DATE(s.started_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN s.total_cost ELSE 0 END) as cost_last_7_days,
+                        SUM(CASE WHEN DATE(s.started_at) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) THEN s.total_cost ELSE 0 END) as cost_last_30_days
+                    FROM sessions s
+                    WHERE s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                """, (days,))
+                return await cursor.fetchone()
+
+    async def get_cost_by_brand(self, days: int = 30):
+        """Get cost breakdown by brand"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute("""
+                    SELECT 
+                        b.id as brand_id,
+                        b.brand_display_name,
+                        b.brand_key,
+                        b.default_model,
+                        COUNT(DISTINCT s.id) as session_count,
+                        COUNT(DISTINCT s.user_id) as unique_users,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as input_cost,
+                        SUM(s.output_cost) as output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        SUM(CASE WHEN DATE(s.started_at) = CURDATE() THEN s.total_cost ELSE 0 END) as cost_today,
+                        (SUM(s.total_cost) / NULLIF(COUNT(DISTINCT s.user_id), 0)) as cost_per_user
+                    FROM brands b
+                    LEFT JOIN sessions s ON b.id = s.brand_id 
+                        AND s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    WHERE b.is_active = TRUE
+                    GROUP BY b.id, b.brand_display_name, b.brand_key, b.default_model
+                    ORDER BY total_cost DESC
+                """, (days,))
+                return await cursor.fetchall()
+
+    async def get_cost_by_model(self, brand_id: Optional[int] = None, days: int = 30):
+        """Get cost breakdown by model"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clause = "WHERE s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)"
+                params = [days]
+                
+                if brand_id:
+                    where_clause += " AND s.brand_id = %s"
+                    params.append(brand_id)
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        COALESCE(s.model_name, 'unknown') COLLATE utf8mb4_unicode_ci as model_name,
+                        m.display_name,
+                        COUNT(DISTINCT s.id) as session_count,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        m.input_price_per_million,
+                        m.output_price_per_million
+                    FROM sessions s
+                    LEFT JOIN models m ON s.model_name COLLATE utf8mb4_unicode_ci = m.model_name COLLATE utf8mb4_unicode_ci
+                    {where_clause}
+                    GROUP BY s.model_name, m.display_name, m.input_price_per_million, m.output_price_per_million
+                    ORDER BY total_cost DESC
+                """, params)
+                return await cursor.fetchall()
+
+    async def get_daily_cost_trend(self, brand_id: Optional[int] = None, days: int = 30):
+        """Get daily cost trends"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clause = "WHERE s.started_at >= DATE_SUB(CURDATE(), INTERVAL %s DAY)"
+                params = [days]
+                
+                if brand_id:
+                    where_clause += " AND s.brand_id = %s"
+                    params.append(brand_id)
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        DATE(s.started_at) as date,
+                        COUNT(DISTINCT s.id) as sessions,
+                        COUNT(DISTINCT s.user_id) as users,
+                        SUM(s.message_count) as messages,
+                        SUM(s.total_input_tokens) as input_tokens,
+                        SUM(s.total_output_tokens) as output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as input_cost,
+                        SUM(s.output_cost) as output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session
+                    FROM sessions s
+                    {where_clause}
+                    GROUP BY DATE(s.started_at)
+                    ORDER BY date DESC
+                """, params)
+                return await cursor.fetchall()
+
+    async def get_top_cost_sessions(self, limit: int = 10, brand_id: Optional[int] = None):
+        """Get sessions with highest costs"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clause = ""
+                params = []
+                
+                if brand_id:
+                    where_clause = "WHERE s.brand_id = %s"
+                    params.append(brand_id)
+                
+                params.append(limit)
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        s.session_id,
+                        s.started_at,
+                        s.model_name,
+                        s.message_count,
+                        s.total_tokens,
+                        s.input_cost,
+                        s.output_cost,
+                        s.total_cost,
+                        b.brand_display_name,
+                        u.email as user_email,
+                        u.name as user_name
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    LEFT JOIN users u ON s.user_id = u.id
+                    {where_clause}
+                    ORDER BY s.total_cost DESC
+                    LIMIT %s
+                """, params)
+                return await cursor.fetchall()
+
+    async def get_user_cost_breakdown(self, user_id: int):
+        """Get detailed cost breakdown for a specific user"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # Overall user cost stats
+                await cursor.execute("""
+                    SELECT 
+                        u.id,
+                        u.email,
+                        u.name,
+                        COUNT(DISTINCT s.id) as total_sessions,
+                        COUNT(DISTINCT s.brand_id) as brands_used,
+                        SUM(s.message_count) as total_messages,
+                        SUM(s.total_input_tokens) as total_input_tokens,
+                        SUM(s.total_output_tokens) as total_output_tokens,
+                        SUM(s.total_tokens) as total_tokens,
+                        SUM(s.input_cost) as total_input_cost,
+                        SUM(s.output_cost) as total_output_cost,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost_per_session,
+                        MAX(s.total_cost) as max_session_cost,
+                        MIN(s.total_cost) as min_session_cost,
+                        MAX(s.started_at) as last_session_date
+                    FROM users u
+                    LEFT JOIN sessions s ON u.id = s.user_id
+                    WHERE u.id = %s
+                    GROUP BY u.id, u.email, u.name
+                """, (user_id,))
+                user_summary = await cursor.fetchone()
+                
+                # Cost by brand for this user
+                await cursor.execute("""
+                    SELECT 
+                        b.brand_display_name,
+                        b.brand_key,
+                        COUNT(DISTINCT s.id) as sessions,
+                        SUM(s.message_count) as messages,
+                        SUM(s.total_tokens) as tokens,
+                        SUM(s.total_cost) as cost,
+                        AVG(s.total_cost) as avg_cost_per_session
+                    FROM sessions s
+                    JOIN brands b ON s.brand_id = b.id
+                    WHERE s.user_id = %s
+                    GROUP BY b.id, b.brand_display_name, b.brand_key
+                    ORDER BY cost DESC
+                """, (user_id,))
+                brand_breakdown = await cursor.fetchall()
+                
+                # Recent sessions with costs
+                await cursor.execute("""
+                    SELECT 
+                        s.session_id,
+                        s.started_at,
+                        s.model_name,
+                        s.message_count,
+                        s.total_tokens,
+                        s.total_cost,
+                        b.brand_display_name
+                    FROM sessions s
+                    JOIN brands b ON s.brand_id = b.id
+                    WHERE s.user_id = %s
+                    ORDER BY s.started_at DESC
+                    LIMIT 10
+                """, (user_id,))
+                recent_sessions = await cursor.fetchall()
+                
+                return {
+                    'summary': user_summary,
+                    'brand_breakdown': brand_breakdown,
+                    'recent_sessions': recent_sessions
+                }
+
+    async def get_cost_efficiency_metrics(self, brand_id: Optional[int] = None, days: int = 30):
+        """Get cost efficiency metrics"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clause = "WHERE s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)"
+                params = [days]
+                
+                if brand_id:
+                    where_clause += " AND s.brand_id = %s"
+                    params.append(brand_id)
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        (SUM(s.total_cost) / NULLIF(COUNT(DISTINCT s.id), 0)) as cost_per_session,
+                        (SUM(s.total_cost) / NULLIF(COUNT(DISTINCT s.user_id), 0)) as cost_per_user,
+                        (SUM(s.total_cost) / NULLIF(SUM(s.message_count), 0)) as cost_per_message,
+                        (SUM(s.total_cost) / NULLIF(SUM(s.total_tokens), 0) * 1000000) as cost_per_million_tokens,
+                        (SUM(s.total_input_tokens) / NULLIF(SUM(s.total_tokens), 0) * 100) as input_token_percentage,
+                        (SUM(s.total_output_tokens) / NULLIF(SUM(s.total_tokens), 0) * 100) as output_token_percentage,
+                        (SUM(s.input_cost) / NULLIF(SUM(s.total_cost), 0) * 100) as input_cost_percentage,
+                        (SUM(s.output_cost) / NULLIF(SUM(s.total_cost), 0) * 100) as output_cost_percentage
+                    FROM sessions s
+                    {where_clause}
+                """, params)
+                return await cursor.fetchone()
+
+    async def get_hourly_cost_pattern(self, brand_id: Optional[int] = None, days: int = 7):
+        """Get cost patterns by hour of day"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clause = "WHERE s.started_at >= DATE_SUB(NOW(), INTERVAL %s DAY)"
+                params = [days]
+                
+                if brand_id:
+                    where_clause += " AND s.brand_id = %s"
+                    params.append(brand_id)
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        HOUR(s.started_at) as hour,
+                        COUNT(DISTINCT s.id) as sessions,
+                        SUM(s.total_cost) as total_cost,
+                        AVG(s.total_cost) as avg_cost
+                    FROM sessions s
+                    {where_clause}
+                    GROUP BY HOUR(s.started_at)
+                    ORDER BY hour
+                """, params)
+                return await cursor.fetchall()
+
+    async def export_cost_report(self, brand_id: Optional[int] = None, start_date: str = None, end_date: str = None):
+        """Generate comprehensive cost report for export"""
+        async with self.pool.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                where_clauses = []
+                params = []
+                
+                if brand_id:
+                    where_clauses.append("s.brand_id = %s")
+                    params.append(brand_id)
+                
+                if start_date:
+                    where_clauses.append("DATE(s.started_at) >= %s")
+                    params.append(start_date)
+                
+                if end_date:
+                    where_clauses.append("DATE(s.started_at) <= %s")
+                    params.append(end_date)
+                
+                where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+                
+                await cursor.execute(f"""
+                    SELECT 
+                        s.session_id,
+                        DATE(s.started_at) as date,
+                        TIME(s.started_at) as time,
+                        b.brand_display_name,
+                        u.email as user_email,
+                        u.name as user_name,
+                        s.model_name,
+                        s.message_count,
+                        s.total_input_tokens,
+                        s.total_output_tokens,
+                        s.total_tokens,
+                        s.input_cost,
+                        s.output_cost,
+                        s.total_cost,
+                        s.duration_seconds,
+                        s.status
+                    FROM sessions s
+                    LEFT JOIN brands b ON s.brand_id = b.id
+                    LEFT JOIN users u ON s.user_id = u.id
+                    {where_clause}
+                    ORDER BY s.started_at DESC
+                """, params)
+                return await cursor.fetchall()
+    
 # Global database handler instance
 db_handler = DatabaseHandler()

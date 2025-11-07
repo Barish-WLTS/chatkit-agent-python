@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cost Analytics Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .header-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 64px;
+        }
+
+        .header-left h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            letter-spacing: -0.02em;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .user-info {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .user-info strong {
+            color: #1a1a1a;
+            font-weight: 500;
+        }
+
+        .btn-logout {
+            padding: 8px 16px;
+            background: #1a1a1a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-logout:hover {
+            background: #374151;
+        }
+
+        .btn-primary {
+            background-color: transparent;
+            color: #2f2f2f;
+            border: 2px solid #2f2f2f;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: all 0.25s ease-in-out;
+            position: relative;
+        }
+
+        .btn-primary:hover {
+            background-color: #2f2f2f;
+            color: #ffffff;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(47, 47, 47, 0.15);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(47, 47, 47, 0.1);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #374151;
+            border: 2px solid #e5e7eb;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .btn-secondary:hover {
+            background: #f9fafb;
+            border-color: #9ca3af;
+            transform: translateY(-1px);
+        }
+
+        /* Filters Section */
+        .filters-container {
+            background: white;
+            padding: 20px;
+            margin: 20px auto;
+            max-width: 1400px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 20px;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .filter-group label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            min-width: 150px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-select:hover {
+            border-color: #1a1a1a;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: #1a1a1a;
+            box-shadow: 0 0 0 3px rgba(26, 26, 26, 0.1);
+        }
+
+        /* Breadcrumb Styles */
+        .breadcrumb-nav {
+            padding: 12px 24px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            list-style: none;
+            gap: 8px;
+            padding: 8px 16px;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(229, 231, 235, 0.5);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            width: fit-content;
+        }
+
+        .breadcrumb-item {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .breadcrumb-item:not(:last-child)::after {
+            content: '›';
+            margin-left: 8px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+
+        .breadcrumb-item a {
+            color: #6b7280;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .breadcrumb-item a:hover {
+            color: #1a1a1a;
+            background: rgba(243, 244, 246, 0.8);
+        }
+
+        .breadcrumb-item.active span {
+            color: #1a1a1a;
+            font-weight: 500;
+            padding: 4px 8px;
+        }
+
+        /* Container */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 24px;
+            border: 1px solid #e5e7eb;
+            transition: all 0.2s ease;
+        }
+
+        .stat-card:hover {
+            border-color: #d1d5db;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+        }
+
+        .stat-card.cost-highlight {
+            background: linear-gradient(135deg, #1a1a1a 0%, #374151 100%);
+            color: white;
+            border: none;
+        }
+
+        .stat-card.cost-highlight .stat-label,
+        .stat-card.cost-highlight .stat-subtext {
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .stat-card.cost-highlight .stat-value {
+            color: white;
+            font-weight: 700;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: #6b7280;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }
+
+        .stat-subtext {
+            font-size: 13px;
+            color: #9ca3af;
+        }
+
+        /* Efficiency Grid */
+        .efficiency-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 20px;
+        }
+
+        .efficiency-card {
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #e5e7eb;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .efficiency-card:hover {
+            border-color: #1a1a1a;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .efficiency-label {
+            font-size: 13px;
+            color: #6b7280;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .efficiency-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a1a;
+        }
+
+        /* Section */
+        .section {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 28px;
+            margin-bottom: 24px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+            letter-spacing: -0.01em;
+        }
+
+        /* Chart Container */
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            height: 400px;
+            position: relative;
+        }
+
+        /* Table */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            background: #f9fafb;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 14px;
+            color: #374151;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr {
+            transition: background 0.15s ease;
+        }
+
+        tbody tr:hover {
+            background: #f9fafb;
+        }
+
+        tbody tr[onclick] {
+            cursor: pointer;
+        }
+
+        /* Cost Table Cells */
+        .cost-cell {
+            color: #10b981;
+            font-weight: 600;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        .cost-cell-highlight {
+            color: #1a1a1a;
+            font-weight: 700;
+            font-size: 15px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        table tbody tr:hover .cost-cell,
+        table tbody tr:hover .cost-cell-highlight {
+            background: rgba(26, 26, 26, 0.02);
+        }
+
+        /* Code styling */
+        code {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 12px;
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #374151;
+        }
+
+        /* No data state */
+        .no-data {
+            text-align: center;
+            padding: 48px 24px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-container {
+                height: auto;
+                padding: 16px;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+
+            .header-left h1 {
+                font-size: 18px;
+            }
+
+            .header-right {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            .filters-container {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .filter-select {
+                width: 100%;
+            }
+
+            .container {
+                padding: 24px 16px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .stat-value {
+                font-size: 28px;
+            }
+
+            .efficiency-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .chart-container {
+                height: 300px;
+            }
+
+            .section {
+                padding: 20px 16px;
+            }
+
+            .section-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+
+            .table-container {
+                font-size: 13px;
+            }
+
+            th, td {
+                padding: 12px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-container">
+            <div class="header-left">
+                <h1>Cost Analytics Dashboard</h1>
+            </div>
+            <div class="header-right">
+                <a href="/admin/dashboard">
+                    <button class="btn-primary">Back to Dashboard</button>
+                </a>
+                <div class="user-info">
+                    Welcome, <strong>{{ username }}</strong>
+                </div>
+                <a href="/admin/logout">
+                    <button class="btn-logout">Logout</button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Breadcrumb Navigation -->
+    {% if breadcrumbs %}
+    <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+        <ol class="breadcrumb">
+            {% for item in breadcrumbs %}
+            <li class="breadcrumb-item {% if item.active %}active{% endif %}">
+                {% if item.url and not item.active %}
+                    <a href="{{ item.url }}">{{ item.label }}</a>
+                {% else %}
+                    <span>{{ item.label }}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
+
+    <!-- Filters Section -->
+    <div class="filters-container">
+        <div class="filter-group">
+            <label for="days-filter">Time Period:</label>
+            <select id="days-filter" class="filter-select">
+                <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 Days</option>
+                <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 Days</option>
+                <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 Days</option>
+                <option value="365" {% if days == 365 %}selected{% endif %}>Last Year</option>
+            </select>
+        </div>
+        
+        <div class="filter-group">
+            <label for="brand-filter">Brand:</label>
+            <select id="brand-filter" class="filter-select">
+                <option value="">All Brands</option>
+                {% for brand in brands %}
+                <option value="{{ brand.id }}" {% if selected_brand_id == brand.id|string %}selected{% endif %}>
+                    {{ brand.brand_display_name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <button class="btn-primary" onclick="applyFilters()">Apply Filters</button>
+        <button class="btn-secondary" onclick="exportCostReport()">Export Report</button>
+    </div>
+
+    <div class="container">
+        <!-- Cost Overview Cards -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Cost Overview ({{ days }} days)</h2>
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-card cost-highlight">
+                    <div class="stat-label">Total Costs</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.total_cost or 0) }}</div>
+                    <div class="stat-subtext">
+                        Today: ${{ "%.4f"|format(cost_overview.cost_today or 0) }}
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Avg Cost/Session</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.avg_cost_per_session or 0) }}</div>
+                    <div class="stat-subtext">
+                        {{ cost_overview.total_sessions or 0 }} total sessions
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Input Cost</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.total_input_cost or 0) }}</div>
+                    <div class="stat-subtext">
+                        {{ "%.1fM"|format((cost_overview.total_input_tokens or 0) / 1000000) }} tokens
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Output Cost</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.total_output_cost or 0) }}</div>
+                    <div class="stat-subtext">
+                        {{ "%.1fM"|format((cost_overview.total_output_tokens or 0) / 1000000) }} tokens
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Last 7 Days</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.cost_last_7_days or 0) }}</div>
+                    <div class="stat-subtext">Week trend</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Last 30 Days</div>
+                    <div class="stat-value">${{ "%.4f"|format(cost_overview.cost_last_30_days or 0) }}</div>
+                    <div class="stat-subtext">Month trend</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Cost per User</div>
+                    <div class="stat-value">
+                        {% if cost_overview.unique_users and cost_overview.total_cost %}
+                            ${{ "%.4f"|format(cost_overview.total_cost / cost_overview.unique_users) }}
+                        {% else %}
+                            $0.00
+                        {% endif %}
+                    </div>
+                    <div class="stat-subtext">{{ cost_overview.unique_users or 0 }} users</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Cost per Million Tokens</div>
+                    <div class="stat-value">
+                        {% if cost_overview.total_tokens and cost_overview.total_cost %}
+                            ${{ "%.4f"|format((cost_overview.total_cost / cost_overview.total_tokens) * 1000000) }}
+                        {% else %}
+                            $0.00
+                        {% endif %}
+                    </div>
+                    <div class="stat-subtext">Effective rate</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cost Efficiency Metrics -->
+        {% if efficiency_metrics %}
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Cost Efficiency Metrics</h2>
+            </div>
+            
+            <div class="efficiency-grid">
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Cost per Message</div>
+                    <div class="efficiency-value">${{ "%.4f"|format(efficiency_metrics.cost_per_message or 0) }}</div>
+                </div>
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Cost per User</div>
+                    <div class="efficiency-value">${{ "%.4f"|format(efficiency_metrics.cost_per_user or 0) }}</div>
+                </div>
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Input Token %</div>
+                    <div class="efficiency-value">{{ "%.1f"|format(efficiency_metrics.input_token_percentage or 0) }}%</div>
+                </div>
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Output Token %</div>
+                    <div class="efficiency-value">{{ "%.1f"|format(efficiency_metrics.output_token_percentage or 0) }}%</div>
+                </div>
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Input Cost %</div>
+                    <div class="efficiency-value">{{ "%.1f"|format(efficiency_metrics.input_cost_percentage or 0) }}%</div>
+                </div>
+                <div class="efficiency-card">
+                    <div class="efficiency-label">Output Cost %</div>
+                    <div class="efficiency-value">{{ "%.1f"|format(efficiency_metrics.output_cost_percentage or 0) }}%</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Daily Cost Trend Chart -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Daily Cost Trend</h2>
+            </div>
+            <div class="chart-container">
+                <canvas id="costTrendChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Cost by Brand -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Cost by Brand</h2>
+            </div>
+            {% if cost_by_brand %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Brand</th>
+                            <th>Model</th>
+                            <th>Sessions</th>
+                            <th>Users</th>
+                            <th>Total Tokens</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
+                            <th>Avg/Session</th>
+                            <th>Cost/User</th>
+                            <th>Today</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for brand in cost_by_brand %}
+                        <tr onclick="window.location.href='/admin/brand/{{ brand.brand_id }}'" style="cursor: pointer;">
+                            <td><strong>{{ brand.brand_display_name }}</strong></td>
+                            <td><code>{{ brand.default_model or 'N/A' }}</code></td>
+                            <td>{{ brand.session_count }}</td>
+                            <td>{{ brand.unique_users }}</td>
+                            <td>{{ "%.1fK"|format((brand.total_tokens or 0) / 1000) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(brand.input_cost or 0) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(brand.output_cost or 0) }}</td>
+                            <td class="cost-cell-highlight">${{ "%.4f"|format(brand.total_cost or 0) }}</td>
+                            <td>${{ "%.4f"|format(brand.avg_cost_per_session or 0) }}</td>
+                            <td>${{ "%.4f"|format(brand.cost_per_user or 0) }}</td>
+                            <td>${{ "%.4f"|format(brand.cost_today or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No cost data available</div>
+            {% endif %}
+        </div>
+
+        <!-- Cost by Model -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Cost by Model</h2>
+            </div>
+            {% if cost_by_model %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Sessions</th>
+                            <th>Total Tokens</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
+                            <th>Avg/Session</th>
+                            <th>Listed Rate</th>
+                            <th>Effective Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for model in cost_by_model %}
+                        <tr>
+                            <td><strong>{{ model.display_name or model.model_name }}</strong></td>
+                            <td>{{ model.session_count }}</td>
+                            <td>{{ "%.1fK"|format((model.total_tokens or 0) / 1000) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(model.input_cost or 0) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(model.output_cost or 0) }}</td>
+                            <td class="cost-cell-highlight">${{ "%.4f"|format(model.total_cost or 0) }}</td>
+                            <td>${{ "%.4f"|format(model.avg_cost_per_session or 0) }}</td>
+                            <td>
+                                <small>
+                                    In: ${{ "%.4f"|format(model.input_price_per_million or 0) }}/M<br>
+                                    Out: ${{ "%.4f"|format(model.output_price_per_million or 0) }}/M
+                                </small>
+                            </td>
+                            <td>${{ "%.4f"|format(model.effective_cost_per_million or 0) }}/M</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No model cost data available</div>
+            {% endif %}
+        </div>
+
+        <!-- Top Cost Sessions -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Highest Cost Sessions</h2>
+            </div>
+            {% if top_sessions %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Session ID</th>
+                            <th>Brand</th>
+                            <th>User</th>
+                            <th>Model</th>
+                            <th>Messages</th>
+                            <th>Tokens</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for session in top_sessions %}
+                        <tr>
+                            <td><code>{{ session.session_id[:16] }}...</code></td>
+                            <td>{{ session.brand_display_name }}</td>
+                            <td>
+                                {% if session.user_email %}
+                                    {{ session.user_name or session.user_email }}
+                                {% else %}
+                                    <span style="color: #9ca3af;">Anonymous</span>
+                                {% endif %}
+                            </td>
+                            <td><code>{{ session.model_name }}</code></td>
+                            <td>{{ session.message_count }}</td>
+                            <td>{{ "%.1fK"|format((session.total_tokens or 0) / 1000) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(session.input_cost or 0) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(session.output_cost or 0) }}</td>
+                            <td class="cost-cell-highlight">${{ "%.4f"|format(session.total_cost or 0) }}</td>
+                            <td style="font-size: 13px;">{{ session.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No session data available</div>
+            {% endif %}
+        </div>
+
+        <!-- Hourly Cost Pattern -->
+        {% if hourly_pattern %}
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Hourly Cost Pattern (Last 7 Days)</h2>
+            </div>
+            <div class="chart-container">
+                <canvas id="hourlyPatternChart"></canvas>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Daily Breakdown Table -->
+        <div class="section">
+            <div class="section-header">
+                <h2 class="section-title">Daily Cost Breakdown</h2>
+            </div>
+            {% if daily_trend %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Sessions</th>
+                            <th>Users</th>
+                            <th>Messages</th>
+                            <th>Total Tokens</th>
+                            <th>Input Cost</th>
+                            <th>Output Cost</th>
+                            <th>Total Cost</th>
+                            <th>Avg/Session</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for day in daily_trend %}
+                        <tr>
+                            <td><strong>{{ day.date.strftime('%Y-%m-%d') }}</strong></td>
+                            <td>{{ day.sessions }}</td>
+                            <td>{{ day.users }}</td>
+                            <td>{{ day.messages }}</td>
+                            <td>{{ "%.1fK"|format((day.total_tokens or 0) / 1000) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(day.input_cost or 0) }}</td>
+                            <td class="cost-cell">${{ "%.4f"|format(day.output_cost or 0) }}</td>
+                            <td class="cost-cell-highlight">${{ "%.4f"|format(day.total_cost or 0) }}</td>
+                            <td>${{ "%.4f"|format(day.avg_cost_per_session or 0) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="no-data">No daily trend data available</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Apply filters
+        function applyFilters() {
+            const days = document.getElementById('days-filter').value;
+            const brandId = document.getElementById('brand-filter').value;
+            let url = '/admin/costs?days=' + days;
+            if (brandId) url += '&brand_id=' + brandId;
+            window.location.href = url;
+        }
+
+        // Export report
+        function exportCostReport() {
+            const brandId = document.getElementById('brand-filter').value;
+            let url = '/admin/costs/export';
+            if (brandId) url += '?brand_id=' + brandId;
+            window.open(url, '_blank');
+        }
+
+        // Cost Trend Chart
+        {% if daily_trend and daily_trend|length > 0 %}
+        const trendCtx = document.getElementById('costTrendChart');
+        if (trendCtx) {
+            new Chart(trendCtx.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: [{% for day in daily_trend %}'{{ day.date.strftime("%m/%d") }}'{% if not loop.last %},{% endif %}{% endfor %}],
+                    datasets: [
+                        {
+                            label: 'Total Cost',
+                            data: [{% for day in daily_trend %}{{ day.total_cost or 0 }}{% if not loop.last %},{% endif %}{% endfor %}],
+                            backgroundColor: 'rgba(26, 26, 26, 0.1)',
+                            borderColor: 'rgb(26, 26, 26)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Input Cost',
+                            data: [{% for day in daily_trend %}{{ day.input_cost or 0 }}{% if not loop.last %},{% endif %}{% endfor %}],
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderColor: 'rgb(16, 185, 129)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Output Cost',
+                            data: [{% for day in daily_trend %}{{ day.output_cost or 0 }}{% if not loop.last %},{% endif %}{% endfor %}],
+                            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                            borderColor: 'rgb(245, 158, 11)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: { 
+                            position: 'top',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 15,
+                                font: {
+                                    size: 12,
+                                    weight: '500'
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(26, 26, 26, 0.95)',
+                            titleColor: '#fff',
+                            bodyColor: '#fff',
+                            padding: 12,
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': $' + context.parsed.y.toFixed(4);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toFixed(2);
+                                },
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        {% else %}
+        // Show "no data" message if chart container exists
+        const trendContainer = document.getElementById('costTrendChart');
+        if (trendContainer) {
+            trendContainer.parentElement.innerHTML = '<div class="no-data">No daily trend data available</div>';
+        }
+        {% endif %}
+
+        // Hourly Pattern Chart
+        {% if hourly_pattern and hourly_pattern|length > 0 %}
+        const hourlyCtx = document.getElementById('hourlyPatternChart');
+        if (hourlyCtx) {
+            new Chart(hourlyCtx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: [{% for hour in hourly_pattern %}'{{ "%02d"|format(hour.hour) }}:00'{% if not loop.last %},{% endif %}{% endfor %}],
+                    datasets: [{
+                        label: 'Cost by Hour',
+                        data: [{% for hour in hourly_pattern %}{{ hour.total_cost or 0 }}{% if not loop.last %},{% endif %}{% endfor %}],
+                        backgroundColor: 'rgba(26, 26, 26, 0.8)',
+                        borderColor: 'rgb(26, 26, 26)',
+                        borderWidth: 1,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { 
+                            display: false 
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(26, 26, 26, 0.95)',
+                            titleColor: '#fff',
+                            bodyColor: '#fff',
+                            padding: 12,
+                            borderColor: '#374151',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    return 'Cost: $' + context.parsed.y.toFixed(4);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toFixed(2);
+                                },
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        {% else %}
+        const hourlyContainer = document.getElementById('hourlyPatternChart');
+        if (hourlyContainer) {
+            hourlyContainer.parentElement.innerHTML = '<div class="no-data">No hourly pattern data available</div>';
+        }
+        {% endif %}
+    </script>
+</body>
+</html

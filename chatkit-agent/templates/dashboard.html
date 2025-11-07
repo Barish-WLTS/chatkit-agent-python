@@ -561,6 +561,7 @@
                 <a class="nav-item" data-section="emails">Emails Sent</a>
                 <a class="nav-item" data-section="duration">Avg Duration</a>
                 <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="costs">Total Costs</a>
                 <a class="nav-item" data-section="brands">Active Brands</a>
             </nav>
         </div>
@@ -626,6 +627,32 @@
                     </div>
                     <div class="stat-subtext">API usage</div>
                 </div>
+
+                <div class="stat-card" data-navigate="costs">
+                    <div class="stat-label">Total Cost</div>
+                    <div class="stat-value">
+                        {% if overall_stats.total_cost %}
+                            ${{ "%.4f"|format(overall_stats.total_cost) }}
+                        {% else %}
+                            $0.00
+                        {% endif %}
+                    </div>
+                    <div class="stat-subtext">
+                        Today: ${{ "%.4f"|format(today_stats.cost_today or 0) }}
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-label">Avg Cost/Session</div>
+                    <div class="stat-value">
+                        {% if overall_stats.avg_cost_per_session %}
+                            ${{ "%.4f"|format(overall_stats.avg_cost_per_session) }}
+                        {% else %}
+                            $0.00
+                        {% endif %}
+                    </div>
+                    <div class="stat-subtext">Per session</div>
+                </div>
             </div>
 
             <!-- Brands Overview -->
@@ -681,6 +708,7 @@
                                 <th>User</th>
                                 <th>Messages</th>
                                 <th>Tokens</th>
+                                <th>Cost</th>
                                 <th>Status</th>
                                 <th>Started</th>
                             </tr>
@@ -699,6 +727,7 @@
                                 </td>
                                 <td>{{ session.message_count }}</td>
                                 <td>{{ session.total_tokens }}</td>
+                                <td>${{ "%.4f"|format(session.total_cost or 0) }}</td>
                                 <td>
                                     {% if session.status == 'active' %}
                                         <span class="badge badge-success">Active</span>
@@ -776,6 +805,10 @@
                                 <th>User</th>
                                 <th>Messages</th>
                                 <th>Tokens</th>
+                                <th>Model</th>
+                                <th>Input Cost</th>
+                                <th>Output Cost</th>
+                                <th>Total Cost</th>
                                 <th>Status</th>
                                 <th>Started</th>
                             </tr>
@@ -794,6 +827,10 @@
                                 </td>
                                 <td>{{ session.message_count }}</td>
                                 <td>{{ session.total_tokens }}</td>
+                                <td><code style="font-size: 11px;">{{ session.model_name or 'N/A' }}</code></td>
+                                <td style="color: #059669;">${{ "%.4f"|format(session.input_cost or 0) }}</td>
+                                <td style="color: #dc2626;">${{ "%.4f"|format(session.output_cost or 0) }}</td>
+                                <td style="font-weight: 600; color: #1f2937;">${{ "%.4f"|format(session.total_cost or 0) }}</td>
                                 <td>
                                     {% if session.status == 'active' %}
                                         <span class="badge badge-success">Active</span>
@@ -835,6 +872,8 @@
                                 <th>Name</th>
                                 <th>Total Sessions</th>
                                 <th>Total Messages</th>
+                                <th>Total Cost</th>
+                                <th>Avg Cost/Session</th>
                                 <th>Last Seen</th>
                             </tr>
                         </thead>
@@ -845,6 +884,16 @@
                                 <td>{{ user.name or '-' }}</td>
                                 <td><strong>{{ user.session_count }}</strong></td>
                                 <td>{{ user.total_messages or 0 }}</td>
+                                <td style="font-weight: 600; color: #1f2937;">
+                                    ${{ "%.4f"|format(user.total_cost or 0) }}
+                                </td>
+                                <td style="color: #6b7280;">
+                                    {% if user.session_count and user.total_cost %}
+                                        ${{ "%.4f"|format(user.total_cost / user.session_count) }}
+                                    {% else %}
+                                        $0.00
+                                    {% endif %}
+                                </td>
                                 <td style="font-size: 13px; color: #6b7280;">
                                     {% if user.last_seen %}
                                         {{ user.last_seen.strftime('%Y-%m-%d %H:%M') }}
@@ -1022,6 +1071,17 @@
                         <div class="stat-subtext">API usage</div>
                     </div>
                     <div class="stat-card">
+                        <div class="stat-label">Total Cost</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_cost %}
+                                ${{ "%.4f"|format(overall_stats.total_cost) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">All token costs</div>
+                    </div>
+                    <div class="stat-card">
                         <div class="stat-label">Avg per Session</div>
                         <div class="stat-value">
                             {% if overall_stats.total_tokens and overall_stats.total_sessions %}
@@ -1032,6 +1092,17 @@
                         </div>
                         <div class="stat-subtext">Tokens per session</div>
                     </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Cost per 1K Tokens</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_tokens and overall_stats.total_cost %}
+                                ${{ "%.4f"|format((overall_stats.total_cost / overall_stats.total_tokens) * 1000) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">Effective rate</div>
+                    </div>
                 </div>
                 {% if recent_sessions %}
                 <div class="table-container">
@@ -1040,8 +1111,12 @@
                             <tr>
                                 <th>Session ID</th>
                                 <th>Brand</th>
+                                <th>Model</th>
                                 <th>Messages</th>
                                 <th>Tokens Used</th>
+                                <th>Input Cost</th>
+                                <th>Output Cost</th>
+                                <th>Total Cost</th>
                                 <th>Started</th>
                             </tr>
                         </thead>
@@ -1050,8 +1125,12 @@
                             <tr>
                                 <td><code>{{ session.session_id[:16] }}...</code></td>
                                 <td><strong>{{ session.brand_display_name }}</strong></td>
+                                <td><code style="font-size: 11px;">{{ session.model_name or 'N/A' }}</code></td>
                                 <td>{{ session.message_count }}</td>
                                 <td><strong>{{ session.total_tokens }}</strong></td>
+                                <td style="color: #059669;">${{ "%.4f"|format(session.input_cost or 0) }}</td>
+                                <td style="color: #dc2626;">${{ "%.4f"|format(session.output_cost or 0) }}</td>
+                                <td style="font-weight: 600; color: #1f2937;">${{ "%.4f"|format(session.total_cost or 0) }}</td>
                                 <td style="font-size: 13px; color: #6b7280;">
                                     {{ session.started_at.strftime('%Y-%m-%d %H:%M') }}
                                 </td>
@@ -1105,6 +1184,129 @@
                 {% endif %}
             </div>
         </div>
+        <div id="costs-section" class="hidden">
+            <div class="section">
+                <div class="section-header">
+                    <h2 class="section-title">Cost Analytics</h2>
+                    <a href="/admin/costs" class="btn-dashboard-link">
+                        Go To Full Cost Dashboard →
+                    </a>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-card cost-highlight">
+                        <div class="stat-label">Total Cost</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_cost %}
+                                ${{ "%.4f"|format(overall_stats.total_cost) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">All time</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Cost Today</div>
+                        <div class="stat-value">
+                            ${{ "%.4f"|format(today_stats.cost_today or 0) }}
+                        </div>
+                        <div class="stat-subtext">Last 24 hours</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Avg Cost per Session</div>
+                        <div class="stat-value">
+                            {% if overall_stats.avg_cost_per_session %}
+                                ${{ "%.4f"|format(overall_stats.avg_cost_per_session) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">Average</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Cost per Token</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_tokens and overall_stats.total_cost %}
+                                ${{ "%.6f"|format(overall_stats.total_cost / overall_stats.total_tokens) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">Per token</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Cost per Million Tokens</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_tokens and overall_stats.total_cost %}
+                                ${{ "%.4f"|format((overall_stats.total_cost / overall_stats.total_tokens) * 1000000) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">Effective rate</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Cost per User</div>
+                        <div class="stat-value">
+                            {% if overall_stats.total_users and overall_stats.total_cost %}
+                                ${{ "%.4f"|format(overall_stats.total_cost / overall_stats.total_users) }}
+                            {% else %}
+                                $0.00
+                            {% endif %}
+                        </div>
+                        <div class="stat-subtext">{{ overall_stats.total_users or 0 }} users</div>
+                    </div>
+                </div>
+                
+                <!-- Cost Breakdown Preview -->
+                <div style="margin-top: 30px;">
+                    <h3 style="margin-bottom: 15px; color: #1f2937; font-size: 18px;">Quick Cost Breakdown</h3>
+                    {% if recent_sessions %}
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Session ID</th>
+                                    <th>Brand</th>
+                                    <th>Model</th>
+                                    <th>Messages</th>
+                                    <th>Tokens</th>
+                                    <th>Input Cost</th>
+                                    <th>Output Cost</th>
+                                    <th>Total Cost</th>
+                                    <th>Started</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for session in recent_sessions[:10] %}
+                                <tr>
+                                    <td><code>{{ session.session_id[:16] }}...</code></td>
+                                    <td><strong>{{ session.brand_display_name }}</strong></td>
+                                    <td><code>{{ session.model_name or 'N/A' }}</code></td>
+                                    <td>{{ session.message_count }}</td>
+                                    <td>{{ session.total_tokens }}</td>
+                                    <td class="cost-cell">${{ "%.4f"|format(session.input_cost or 0) }}</td>
+                                    <td class="cost-cell">${{ "%.4f"|format(session.output_cost or 0) }}</td>
+                                    <td class="cost-cell-highlight">${{ "%.4f"|format(session.total_cost or 0) }}</td>
+                                    <td style="font-size: 13px; color: #6b7280;">
+                                        {{ session.started_at.strftime('%Y-%m-%d %H:%M') }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="no-data">No cost data available</div>
+                    {% endif %}
+                </div>
+
+                <div style="margin-top: 20px; text-align: center;">
+                    <a href="/admin/costs" class="btn-primary" style="display: inline-block; padding: 12px 24px; text-decoration: none;">
+                        View Full Cost Analytics Dashboard →
+                    </a>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1119,6 +1321,7 @@
             'emails': document.getElementById('emails-section'),
             'duration': document.getElementById('duration-section'),
             'tokens': document.getElementById('tokens-section'),
+            'costs': document.getElementById('costs-section'),
             'brands': document.getElementById('brands-section')
         };
 

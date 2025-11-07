@@ -121,6 +121,62 @@
             border-bottom-color: #1a1a1a;
         }
 
+        /* Breadcrumb Styles */
+        .breadcrumb-nav {
+            padding: 12px 24px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            list-style: none;
+            gap: 8px;
+            padding: 8px 16px;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(229, 231, 235, 0.5);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            width: fit-content;
+        }
+
+        .breadcrumb-item {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        .breadcrumb-item:not(:last-child)::after {
+            content: '›';
+            margin-left: 8px;
+            color: #9ca3af;
+            font-size: 16px;
+        }
+
+        .breadcrumb-item a {
+            color: #6b7280;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .breadcrumb-item a:hover {
+            color: #1a1a1a;
+            background: rgba(243, 244, 246, 0.8);
+        }
+
+        .breadcrumb-item.active span {
+            color: #1a1a1a;
+            font-weight: 500;
+            padding: 4px 8px;
+        }
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -327,10 +383,28 @@
                 <a class="nav-item" data-section="emails">Emails Sent</a>
                 <a class="nav-item" data-section="duration">Avg Duration</a>
                 <a class="nav-item" data-section="tokens">Total Tokens</a>
+                <a class="nav-item" data-section="costs">Total Costs</a>
                 <a class="nav-item" data-section="brands">Active Brands</a>
             </nav>
         </div>
     </div>
+
+    <!-- Breadcrumb Navigation -->
+    {% if breadcrumbs %}
+    <nav class="breadcrumb-nav" aria-label="Breadcrumb">
+        <ol class="breadcrumb">
+            {% for item in breadcrumbs %}
+            <li class="breadcrumb-item {% if item.active %}active{% endif %}">
+                {% if item.url and not item.active %}
+                    <a href="{{ item.url }}">{{ item.label }}</a>
+                {% else %}
+                    <span>{{ item.label }}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
 
     <div class="container">
         <div class="email-meta-section">
@@ -477,6 +551,7 @@
             'emails': document.getElementById('emails-section'),
             'duration': document.getElementById('duration-section'),
             'tokens': document.getElementById('tokens-section'),
+            'costs': document.getElementById('costs-section'),
             'brands': document.getElementById('brands-section')
         };
 
