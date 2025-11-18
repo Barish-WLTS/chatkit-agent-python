@@ -673,6 +673,132 @@
             margin: 0 auto 20px;
         }
 
+        .form-group-phone {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .country-code-wrapper {
+            position: relative;
+            width: 140px;
+        }
+
+        .country-code-select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 15px;
+            background: var(--bg-dark);
+            color: var(--input-text);
+            cursor: pointer;
+            appearance: none;
+            transition: border-color 0.2s;
+        }
+
+        .country-code-select:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .country-code-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 200px;
+            overflow-y: auto;
+            background: var(--bg-dark);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            margin-top: 4px;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .country-code-dropdown.active {
+            display: block;
+        }
+
+        .country-search {
+            position: sticky;
+            top: 0;
+            background: var(--bg-dark);
+            padding: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .country-search input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+            background: var(--bg-light);
+            color: var(--input-text);
+        }
+
+        .country-search input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .country-option {
+            padding: 10px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text);
+            transition: background 0.2s;
+        }
+
+        .country-option:hover {
+            background: var(--border);
+        }
+
+        .country-option.selected {
+            background: var(--primary);
+            color: white;
+        }
+
+        .phone-input-wrapper {
+            flex: 1;
+        }
+
+        .phone-input-wrapper input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 15px;
+            background: var(--bg-dark);
+            color: var(--input-text);
+            transition: border-color 0.2s;
+        }
+
+        .phone-input-wrapper input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .phone-input-wrapper input.error {
+            border-color: #ef4444;
+        }
+
+        .country-code-dropdown::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .country-code-dropdown::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .country-code-dropdown::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -718,6 +844,26 @@
                     <label for="userEmail">Email <span style="color: #ef4444;">*</span></label>
                     <input type="email" id="userEmail" required>
                     <span class="error-message" id="emailError">Please enter a valid email</span>
+                </div>
+                <div class="form-group" id="phoneGroup" style="display: none;">
+                    <label for="userPhone">Phone Number <span style="color: #ef4444;">*</span></label>
+                    <div class="form-group-phone">
+                        <div class="country-code-wrapper">
+                            <div class="country-code-select" id="countryCodeSelect" onclick="toggleCountryDropdown()">
+                                <span id="selectedCountryCode">+1</span>
+                            </div>
+                            <div class="country-code-dropdown" id="countryCodeDropdown">
+                                <div class="country-search">
+                                    <input type="text" id="countrySearch" placeholder="Search country..." oninput="filterCountries(this.value)">
+                                </div>
+                                <div id="countryList"></div>
+                            </div>
+                        </div>
+                        <div class="phone-input-wrapper">
+                            <input type="tel" id="userPhone" placeholder="Phone number">
+                        </div>
+                    </div>
+                    <span class="error-message" id="phoneError">Please enter a valid phone number</span>
                 </div>
                 <button type="submit" class="submit-btn" id="contactSubmitBtn">Start Chat</button>
             </form>
@@ -809,12 +955,14 @@
         let conversationHistory = [];
         let messageCount = 0;
         let userInfo = { name: '', email: '', phone: '' };
-        let userLocation = { ip: '', city: '', region: '', country: '' };
+        let userLocation = { ip: '', city: '', region: '', country: '', countryCode: '' };
         let currentBrand = 'gbpseo';
         const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
         let inactivityTimer = null;
         let sessionEnded = false;
         let isPageUnloading = false;
+        let countryCodes = [];
+        let filteredCountries = [];
 
         function detectBrand() {
             const hostname = window.location.hostname;
@@ -844,6 +992,94 @@
             return 'gbpseo';
         }
 
+        // Fetch country codes dynamically from REST Countries API
+        async function fetchCountryCodes() {
+            try {
+                const response = await fetch('https://restcountries.com/v3.1/all?fields=name,idd,cca2');
+                const countries = await response.json();
+                
+                countryCodes = countries
+                    .filter(country => country.idd && country.idd.root)
+                    .map(country => ({
+                        name: country.name.common,
+                        code: country.cca2,
+                        dialCode: country.idd.root + (country.idd.suffixes ? country.idd.suffixes[0] : '')
+                    }))
+                    .sort((a, b) => a.name.localeCompare(b.name));
+                
+                filteredCountries = [...countryCodes];
+                renderCountryList();
+                console.log('Country codes loaded:', countryCodes.length);
+            } catch (error) {
+                console.error('Failed to fetch country codes:', error);
+                // Fallback to basic list
+                countryCodes = [
+                    { name: 'United States', code: 'US', dialCode: '+1' },
+                    { name: 'United Kingdom', code: 'GB', dialCode: '+44' },
+                    { name: 'India', code: 'IN', dialCode: '+91' },
+                    { name: 'Canada', code: 'CA', dialCode: '+1' }
+                ];
+                filteredCountries = [...countryCodes];
+                renderCountryList();
+            }
+        }
+
+        function renderCountryList() {
+            const countryList = document.getElementById('countryList');
+            if (!countryList) return;
+            
+            countryList.innerHTML = filteredCountries
+                .map(country => `
+                    <div class="country-option" onclick="selectCountry('${country.dialCode}', '${country.name}')">
+                        ${country.name} (${country.dialCode})
+                    </div>
+                `)
+                .join('');
+        }
+
+        function toggleCountryDropdown() {
+            const dropdown = document.getElementById('countryCodeDropdown');
+            dropdown.classList.toggle('active');
+            
+            if (dropdown.classList.contains('active')) {
+                document.getElementById('countrySearch').focus();
+            }
+        }
+
+        function selectCountry(dialCode, countryName) {
+            document.getElementById('selectedCountryCode').textContent = dialCode;
+            userInfo.countryCode = dialCode;
+            document.getElementById('countryCodeDropdown').classList.remove('active');
+            document.getElementById('countrySearch').value = '';
+            filterCountries('');
+        }
+
+        function filterCountries(searchTerm) {
+            const term = searchTerm.toLowerCase().trim();
+            
+            if (!term) {
+                filteredCountries = [...countryCodes];
+            } else {
+                filteredCountries = countryCodes.filter(country => 
+                    country.name.toLowerCase().includes(term) || 
+                    country.dialCode.includes(term) ||
+                    country.code.toLowerCase().includes(term)
+                );
+            }
+            
+            renderCountryList();
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('countryCodeDropdown');
+            const select = document.getElementById('countryCodeSelect');
+            
+            if (dropdown && select && !dropdown.contains(event.target) && !select.contains(event.target)) {
+                dropdown.classList.remove('active');
+            }
+        });
+
 
         async function getUserLocation() {
             try {
@@ -853,13 +1089,30 @@
                     ip: data.ip || 'Unknown',
                     city: data.city || 'Unknown',
                     region: data.region || 'Unknown',
-                    country: data.country_name || 'Unknown'
+                    country: data.country_name || 'Unknown',
+                    countryCode: data.country_code || 'IN'
                 };
                 console.log('User location detected:', userLocation);
+                
+                // Set country code based on location if brand is gbpseo
+                if (currentBrand === 'gbpseo') {
+                    const userCountry = countryCodes.find(c => c.code === userLocation.countryCode);
+                    if (userCountry) {
+                        document.getElementById('selectedCountryCode').textContent = userCountry.dialCode;
+                        userInfo.countryCode = userCountry.dialCode;
+                    }
+                }
             } catch (error) {
                 console.error('Failed to get location:', error);
-                userLocation = { ip: 'Unknown', city: 'Unknown', region: 'Unknown', country: 'Unknown' };
+                userLocation = { ip: 'Unknown', city: 'Unknown', region: 'Unknown', country: 'Unknown', countryCode: 'US' };
             }
+        }
+
+        function validatePhone(phone) {
+            // Remove any spaces, dashes, or parentheses
+            const cleaned = phone.replace(/[\s\-\(\)]/g, '');
+            // Check if it's a valid number (6-15 digits)
+            return /^\d{6,15}$/.test(cleaned);
         }
 
         function validateEmail(email) {
@@ -872,20 +1125,29 @@
             
             const name = document.getElementById('userName').value.trim();
             const email = document.getElementById('userEmail').value.trim();
+            const phone = currentBrand === 'gbpseo' ? document.getElementById('userPhone').value.trim() : '';
             
             let isValid = true;
             
+            // Reset errors
             document.getElementById('nameError').classList.remove('active');
             document.getElementById('emailError').classList.remove('active');
             document.getElementById('userName').classList.remove('error');
             document.getElementById('userEmail').classList.remove('error');
             
+            if (currentBrand === 'gbpseo') {
+                document.getElementById('phoneError').classList.remove('active');
+                document.getElementById('userPhone').classList.remove('error');
+            }
+            
+            // Validate name
             if (!name || name.length < 2) {
                 document.getElementById('nameError').classList.add('active');
                 document.getElementById('userName').classList.add('error');
                 isValid = false;
             }
             
+            // Validate email
             if (!email || !validateEmail(email)) {
                 document.getElementById('emailError').classList.add('active');
                 document.getElementById('emailError').textContent = 'Please enter a valid email address';
@@ -893,9 +1155,26 @@
                 isValid = false;
             }
             
+            // Validate phone for gbpseo brand only
+            if (currentBrand === 'gbpseo') {
+                if (!phone || !validatePhone(phone)) {
+                    document.getElementById('phoneError').classList.add('active');
+                    document.getElementById('userPhone').classList.add('error');
+                    isValid = false;
+                }
+            }
+            
             if (isValid) {
                 userInfo.name = name;
                 userInfo.email = email;
+                
+                if (currentBrand === 'gbpseo') {
+                    const countryCode = userInfo.countryCode || document.getElementById('selectedCountryCode').textContent;
+                    // Merge country code with phone number with space
+                    userInfo.phone = countryCode + ' ' + phone;
+                } else {
+                    userInfo.phone = ''; // Empty for non-gbpseo brands
+                }
                 
                 document.getElementById('contactModal').classList.remove('visible');
                 document.getElementById('messageInput').disabled = false;
@@ -1307,6 +1586,15 @@
             currentBrand = detectBrand();
             console.log('Detected brand:', currentBrand);
             
+            // Load country codes
+            await fetchCountryCodes();
+            
+            // Show phone field only for gbpseo
+            if (currentBrand === 'gbpseo') {
+                document.getElementById('phoneGroup').style.display = 'block';
+                document.getElementById('userPhone').required = true;
+            }
+            
             const savedUserInfo = sessionStorage.getItem('userContactInfo');
             
             if (savedUserInfo) {
@@ -1328,7 +1616,6 @@
             } else {
                 document.getElementById('contactModal').classList.add('visible');
             }
-            
             
             await getUserLocation();
             
